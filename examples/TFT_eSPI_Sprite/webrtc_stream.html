@@ -142,11 +142,11 @@
             </div>
             <div>
                 <label>Frame Rate (FPS):</label>
-                <input type="number" id="frameRate" value="1" min="1" max="30">
+                <input type="number" id="frameRate" value="6" min="1" max="30">
             </div>
             <div>
                 <label>JPEG Quality:</label>
-                <input type="range" id="quality" class="quality-slider" value="0.2" min="0.1" max="1.0" step="0.1">
+                <input type="range" id="quality" class="quality-slider" value="0.7" min="0.1" max="1.0" step="0.1">
                 <span id="qualityValue">0.7</span>
             </div>
         </div>
@@ -211,6 +211,10 @@
         let lastFrameTime = 0;
         let fpsHistory = [];
         let frameSizeHistory = [];
+        
+        // WebSocket connection
+        let ws = null;
+        let wsConnected = false;
 
         // Update quality value display
         qualitySlider.addEventListener('input', (e) => {
@@ -271,54 +275,88 @@
 
         async function startStreaming() {
             try {
-                const sourceType = sourceTypeSelect.value;
-                let stream;
+                // Connect WebSocket first
+                const espAddress = espAddressInput.value.trim();
+                const wsUrl = espAddress.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws';
                 
-                if (sourceType === 'screen') {
-                    // Request screen capture
-                    updateStatus('🖥️ Requesting screen share...', 'info');
-                    stream = await navigator.mediaDevices.getDisplayMedia({ 
-                        video: { 
-                            width: { ideal: 1920 },
-                            height: { ideal: 1080 },
-                            frameRate: { ideal: 30 }
-                        },
-                        audio: false
-                    });
-                } else {
-                    // Request camera access
-                    updateStatus('🎥 Requesting camera access...', 'info');
-                    stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { 
-                            width: { ideal: 640 },
-                            height: { ideal: 480 },
-                            facingMode: 'user'
-                        } 
-                    });
-                }
+                updateStatus('🔌 Connecting to ESP32...', 'info');
                 
-                video.srcObject = stream;
-                streaming = true;
-                startBtn.disabled = true;
-                stopBtn.disabled = false;
-                frameCount = 0;
-                errorCount = 0;
-                totalDataSize = 0;
-                fpsHistory = [];
-                frameSizeHistory = [];
+                ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer';
                 
-                updateStatus('✅ Streaming active', 'success');
-                
-                // Wait for video to be ready
-                video.onloadedmetadata = () => {
-                    sendFrames();
+                ws.onopen = async () => {
+                    wsConnected = true;
+                    console.log('WebSocket connected!');
+                    
+                    try {
+                        const sourceType = sourceTypeSelect.value;
+                        let stream;
+                        
+                        if (sourceType === 'screen') {
+                            // Request screen capture
+                            updateStatus('🖥️ Requesting screen share...', 'info');
+                            stream = await navigator.mediaDevices.getDisplayMedia({ 
+                                video: { 
+                                    width: { ideal: 1920 },
+                                    height: { ideal: 1080 },
+                                    frameRate: { ideal: 30 }
+                                },
+                                audio: false
+                            });
+                        } else {
+                            // Request camera access
+                            updateStatus('🎥 Requesting camera access...', 'info');
+                            stream = await navigator.mediaDevices.getUserMedia({ 
+                                video: { 
+                                    width: { ideal: 640 },
+                                    height: { ideal: 480 },
+                                    facingMode: 'user'
+                                } 
+                            });
+                        }
+                        
+                        video.srcObject = stream;
+                        streaming = true;
+                        startBtn.disabled = true;
+                        stopBtn.disabled = false;
+                        frameCount = 0;
+                        errorCount = 0;
+                        totalDataSize = 0;
+                        fpsHistory = [];
+                        frameSizeHistory = [];
+                        
+                        updateStatus('✅ Streaming active', 'success');
+                        
+                        // Wait for video to be ready
+                        video.onloadedmetadata = () => {
+                            sendFrames();
+                        };
+                        
+                        // Handle stream ending (user stops screen share)
+                        stream.getVideoTracks()[0].addEventListener('ended', () => {
+                            console.log('Stream ended by user');
+                            stopStreaming();
+                        });
+                    } catch (err) {
+                        console.error('Camera/screen error:', err);
+                        updateStatus('❌ Camera/screen access failed', 'error');
+                        if (ws) ws.close();
+                    }
                 };
                 
-                // Handle stream ending (user stops screen share)
-                stream.getVideoTracks()[0].addEventListener('ended', () => {
-                    console.log('Stream ended by user');
-                    stopStreaming();
-                });
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateStatus('❌ WebSocket connection failed', 'error');
+                    wsConnected = false;
+                };
+                
+                ws.onclose = () => {
+                    console.log('WebSocket closed');
+                    wsConnected = false;
+                    if (streaming) {
+                        updateStatus('⚠️ Connection lost', 'warning');
+                    }
+                };
                 
             } catch (err) {
                 updateStatus('❌ Error: ' + err.message, 'error');
@@ -340,13 +378,18 @@
                 video.srcObject.getTracks().forEach(track => track.stop());
                 video.srcObject = null;
             }
+            if (ws && wsConnected) {
+                ws.close();
+                ws = null;
+                wsConnected = false;
+            }
             startBtn.disabled = false;
             stopBtn.disabled = true;
             updateStatus('⏹️ Streaming stopped', 'info');
         }
 
         async function sendFrames() {
-            if (!streaming) return;
+            if (!streaming || !wsConnected || !ws) return;
 
             // Get display dimensions from settings
             const displayDims = getDisplayDimensions();
@@ -361,39 +404,36 @@
 
                 // Convert to JPEG blob
                 const quality = parseFloat(qualitySlider.value);
+                
+                console.log(`Sending frame: ${canvas.width}x${canvas.height}, quality: ${quality}`);
+                
                 canvas.toBlob(async (blob) => {
-                    if (blob && streaming) {
+                    if (blob && streaming && wsConnected) {
                         try {
-                            const espAddress = espAddressInput.value.trim();
-                            const uploadUrl = espAddress + '/upload';
+                            // Send via WebSocket - MUCH faster than HTTP POST!
+                            const arrayBuffer = await blob.arrayBuffer();
                             
-                            const response = await fetch(uploadUrl, {
-                                method: 'POST',
-                                body: blob,
-                                headers: { 'Content-Type': 'image/jpeg' },
-                                mode: 'no-cors' // Allow cross-origin requests
-                            });
-                            
-                            // With no-cors mode, we can't check response status
-                            // Assume success if no error thrown
-                            frameCount++;
-                            totalDataSize += blob.size;
-                            updateStats(blob.size);
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(arrayBuffer);
+                                
+                                console.log(`Sent ${arrayBuffer.byteLength} bytes via WebSocket`);
+                                
+                                frameCount++;
+                                totalDataSize += arrayBuffer.byteLength;
+                                updateStats(arrayBuffer.byteLength);
+                            }
                             
                         } catch (err) {
                             errorCount++;
                             updateStats();
-                            console.error('Upload error:', err);
-                            
-                            if (errorCount === 1) {
-                                updateStatus('⚠️ Connection issue - check ESP32 address', 'warning');
-                            }
+                            console.error('WebSocket send error:', err);
+                            updateStatus('⚠️ Connection issue', 'warning');
                         }
                     }
                     
                     // Schedule next frame based on desired frame rate
                     if (streaming) {
-                        const fps = parseInt(frameRateInput.value) || 15;
+                        const fps = parseInt(frameRateInput.value) || 6;
                         const delay = 1000 / fps;
                         setTimeout(sendFrames, delay);
                     }
