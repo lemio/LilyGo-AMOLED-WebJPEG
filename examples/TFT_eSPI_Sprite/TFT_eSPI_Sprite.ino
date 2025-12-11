@@ -58,6 +58,9 @@ size_t wsMonoExpectedSize = 0;
 // Performance tracking
 volatile uint32_t frameCount = 0;
 volatile uint32_t lastFrameTime = 0;
+volatile uint32_t skipFrameCount = 0;
+volatile uint32_t deltaFrameCount = 0;
+volatile uint32_t fullFrameCount = 0;
 
 // Helper function to swap bytes in RGB565 format
 inline void swapBytes(uint16_t *data, size_t count) {
@@ -295,6 +298,79 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
                   t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
 }
 
+void drawDeltaJPEG(uint8_t *data, size_t dataSize, bool isMono) {
+    // Delta frame format: [type:1][x:2][y:2][w:2][h:2][jpegData]
+    if (dataSize < 9) {
+        Serial.println("Delta frame too small!");
+        return;
+    }
+    
+    // Parse header
+    uint16_t x = (data[1] << 8) | data[2];
+    uint16_t y = (data[3] << 8) | data[4];
+    uint16_t w = (data[5] << 8) | data[6];
+    uint16_t h = (data[7] << 8) | data[8];
+    
+    uint8_t *jpegData = data + 9;
+    size_t jpegSize = dataSize - 9;
+    
+    Serial.printf("Delta: Region (%d,%d) %dx%d | JPEG=%d bytes | Mono=%s\n", 
+                  x, y, w, h, jpegSize, isMono ? "YES" : "NO");
+    
+    // Decode JPEG region
+    if (!JpegDec.decodeArray(jpegData, jpegSize)) {
+        Serial.println("Delta JPEG decode failed!");
+        return;
+    }
+    
+    uint16_t jpegW = JpegDec.width;
+    uint16_t jpegH = JpegDec.height;
+    
+    if (jpegW != w || jpegH != h) {
+        Serial.printf("Warning: JPEG size mismatch! Expected %dx%d, got %dx%d\n", w, h, jpegW, jpegH);
+    }
+    
+    // Render directly at specified position
+    uint16_t mcu_w = JpegDec.MCUWidth;
+    uint16_t mcu_h = JpegDec.MCUHeight;
+    
+    while (JpegDec.read()) {
+        uint16_t *pImg = JpegDec.pImage;
+        
+        uint16_t mcu_x = JpegDec.MCUx * mcu_w;
+        uint16_t mcu_y = JpegDec.MCUy * mcu_h;
+        
+        uint16_t render_w = (mcu_x + mcu_w <= jpegW) ? mcu_w : (jpegW - mcu_x);
+        uint16_t render_h = (mcu_y + mcu_h <= jpegH) ? mcu_h : (jpegH - mcu_y);
+        
+        if (mcu_x >= jpegW || mcu_y >= jpegH) continue;
+        if (render_w == 0 || render_h == 0) continue;
+        
+        int16_t destX = x + mcu_x;
+        int16_t destY = y + mcu_y;
+        
+        // Clip to display bounds
+        if (destX >= WIDTH || destY >= HEIGHT) continue;
+        if (destX + render_w > WIDTH) render_w = WIDTH - destX;
+        if (destY + render_h > HEIGHT) render_h = HEIGHT - destY;
+        
+        // Handle partial MCU blocks at edges
+        if (render_w != mcu_w || render_h != mcu_h) {
+            uint16_t tempBuffer[render_w * render_h];
+            for (uint16_t row = 0; row < render_h; row++) {
+                for (uint16_t col = 0; col < render_w; col++) {
+                    uint16_t pixel = pImg[row * mcu_w + col];
+                    tempBuffer[row * render_w + col] = (pixel >> 8) | (pixel << 8);
+                }
+            }
+            amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
+        } else {
+            swapBytes(pImg, render_w * render_h);
+            amoled.pushColors(destX, destY, render_w, render_h, pImg);
+        }
+    }
+}
+
 void setupWiFi() {
     Serial.println("Connecting to WiFi...");
     WiFi.mode(WIFI_STA);
@@ -522,6 +598,19 @@ void setupWebServer() {
                 if (info->final && wsAssemblySize == wsExpectedSize) {
                     Serial.printf("Complete frame assembled: %u bytes\n", wsAssemblySize);
                     
+                    // Check frame type (first byte)
+                    uint8_t frameType = wsAssemblyBuffer[0];
+                    
+                    if (frameType == 2) {
+                        // Skip frame - no changes
+                        Serial.println("Skip frame received (no changes)");
+                        skipFrameCount++;
+                        free(wsAssemblyBuffer);
+                        wsAssemblyBuffer = nullptr;
+                        wsAssemblySize = 0;
+                        return;
+                    }
+                    
                     // Try to transfer to display buffer
                     if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
                         // Free old display buffer
@@ -533,6 +622,14 @@ void setupWebServer() {
                         frameBuffer = (volatile uint8_t*)wsAssemblyBuffer;
                         frameSize = wsAssemblySize;
                         newFrameAvailable = true;
+                        isMonochrome = false; // Color endpoint
+                        
+                        // Track frame type
+                        if (frameType == 0) {
+                            fullFrameCount++;
+                        } else if (frameType == 1) {
+                            deltaFrameCount++;
+                        }
                         
                         // Clear assembly buffer pointer (ownership transferred)
                         wsAssemblyBuffer = nullptr;
@@ -601,6 +698,19 @@ void setupWebServer() {
                 if (info->final && wsMonoAssemblySize == wsMonoExpectedSize) {
                     Serial.printf("Mono frame complete: %u bytes\n", wsMonoAssemblySize);
                     
+                    // Check frame type
+                    uint8_t frameType = wsMonoAssemblyBuffer[0];
+                    
+                    if (frameType == 2) {
+                        // Skip frame - no changes
+                        Serial.println("Mono skip frame received");
+                        skipFrameCount++;
+                        free(wsMonoAssemblyBuffer);
+                        wsMonoAssemblyBuffer = nullptr;
+                        wsMonoAssemblySize = 0;
+                        return;
+                    }
+                    
                     if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
                         if (frameBuffer) {
                             free((void*)frameBuffer);
@@ -610,6 +720,13 @@ void setupWebServer() {
                         frameSize = wsMonoAssemblySize;
                         newFrameAvailable = true;
                         isMonochrome = true;  // Mark as monochrome
+                        
+                        // Track frame type
+                        if (frameType == 0) {
+                            fullFrameCount++;
+                        } else if (frameType == 1) {
+                            deltaFrameCount++;
+                        }
                         
                         wsMonoAssemblyBuffer = nullptr;
                         wsMonoAssemblySize = 0;
@@ -691,12 +808,30 @@ void loop()
                 size_t bufSize = frameSize;
                 bool isMono = isMonochrome;
                 
-                // Draw JPEG to display (color or monochrome)
-                if (isMono) {
-                    drawMonoJPEG(bufPtr, bufSize);
-                } else {
-                    drawJPEG(bufPtr, bufSize);
+                // Check if this is a delta-compressed frame or raw JPEG
+                // Delta frames start with type byte (0, 1, or 2)
+                // JPEG files start with 0xFF 0xD8
+                uint8_t firstByte = bufPtr[0];
+                
+                if (firstByte == 0xFF && bufSize > 1 && bufPtr[1] == 0xD8) {
+                    // Raw JPEG (legacy format from original webrtc_stream.html)
+                    if (isMono) {
+                        drawMonoJPEG(bufPtr, bufSize);
+                    } else {
+                        drawJPEG(bufPtr, bufSize);
+                    }
+                } else if (firstByte == 0) {
+                    // Full frame with type byte (from delta-enabled client)
+                    if (isMono) {
+                        drawMonoJPEG(bufPtr + 1, bufSize - 1);
+                    } else {
+                        drawJPEG(bufPtr + 1, bufSize - 1);
+                    }
+                } else if (firstByte == 1) {
+                    // Delta frame - decode region update
+                    drawDeltaJPEG(bufPtr, bufSize, isMono);
                 }
+                // firstByte == 2 (skip) is already handled in WebSocket handler
                 
                 // Track performance
                 frameCount++;
@@ -714,11 +849,15 @@ void loop()
         }
     }
     
-    // Periodic status update with FPS info
+    // Periodic status update with FPS and delta compression stats
     unsigned long now = millis();
     if (now - lastCheck > 30000) {  // Every 30 seconds
         if (frameCount > 0) {
-            Serial.printf("Frames: %lu | Last: %lums\n", frameCount, lastFrameTime);
+            Serial.printf("Total Frames: %lu | Last: %lums\n", frameCount, lastFrameTime);
+            Serial.printf("Delta Stats: Full=%lu | Delta=%lu | Skip=%lu\n", 
+                         fullFrameCount, deltaFrameCount, skipFrameCount);
+            float skipPercent = (skipFrameCount * 100.0) / (fullFrameCount + deltaFrameCount + skipFrameCount + 1);
+            Serial.printf("Bandwidth Saved: %.1f%% (estimated)\n", skipPercent);
         }
         lastCheck = now;
     }

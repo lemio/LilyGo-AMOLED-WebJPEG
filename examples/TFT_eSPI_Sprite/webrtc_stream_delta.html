@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Video Stream - Delta Compression</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+        .badge {
+            background: #ff9800;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        video {
+            max-width: 100%;
+            width: 640px;
+            border: 3px solid #333;
+            border-radius: 10px;
+            margin: 20px 0;
+            background: #000;
+        }
+        button {
+            padding: 15px 40px;
+            font-size: 18px;
+            margin: 10px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            transition: all 0.3s;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+        }
+        button:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        .success { background: #4CAF50; }
+        .error { background: #f44336; }
+        .info { background: #2196F3; }
+        .warning { background: #ff9800; }
+        .stats {
+            background: rgba(33, 33, 33, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+            text-align: left;
+        }
+        .stats h3 {
+            text-align: center;
+            margin-top: 0;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #444;
+        }
+        .stat-label {
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .settings {
+            background: rgba(33, 33, 33, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: left;
+        }
+        .settings > div {
+            margin: 12px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .settings label {
+            min-width: 180px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        input[type="number"], input[type="text"], select {
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #555;
+            background: #222;
+            color: white;
+            font-size: 14px;
+        }
+        input[type="range"] {
+            width: 150px;
+        }
+        .delta-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-left: 5px;
+        }
+        .delta-full { background: #f44336; }
+        .delta-partial { background: #ff9800; }
+        .delta-skip { background: #4CAF50; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 ESP32 Video Streaming</h1>
+        <span class="badge">DELTA COMPRESSION</span>
+        
+        <div class="settings">
+            <h3 style="margin-top: 0; text-align: center;">⚙️ Settings</h3>
+            <div>
+                <label>ESP32 Address:</label>
+                <input type="text" id="espAddress" value="esp.local" style="width: 200px;">
+            </div>
+            <div>
+                <label>Display Size:</label>
+                <select id="displaySize" style="width: 200px;">
+                    <option value="536x240" selected>536x240 (1.91" AMOLED)</option>
+                    <option value="450x600">450x600 (2.41" AMOLED)</option>
+                    <option value="194x368">194x368 (1.47" AMOLED)</option>
+                </select>
+            </div>
+            <div>
+                <label>Source:</label>
+                <select id="sourceType" style="width: 200px;">
+                    <option value="camera">📹 Webcam</option>
+                    <option value="screen">🖥️ Screen Share</option>
+                </select>
+            </div>
+            <div>
+                <label>Frame Rate (FPS):</label>
+                <input type="number" id="frameRate" value="10" min="1" max="30" style="width: 80px;">
+            </div>
+            <div>
+                <label>JPEG Quality:</label>
+                <input type="range" id="quality" value="0.7" min="0.1" max="1.0" step="0.1">
+                <span id="qualityValue">0.7</span>
+            </div>
+            <div>
+                <label>
+                    <input type="checkbox" id="monoMode">
+                    🎨 Monochrome Mode
+                </label>
+            </div>
+            <div>
+                <label>
+                    <input type="checkbox" id="deltaMode" checked>
+                    ⚡ Delta Compression (recommended)
+                </label>
+            </div>
+            <div id="deltaSettings" style="margin-left: 180px; display: flex; flex-direction: column; gap: 10px;">
+                <div>
+                    <label style="min-width: 150px;">Change Threshold:</label>
+                    <input type="range" id="changeThreshold" value="25" min="5" max="100" step="5">
+                    <span id="thresholdValue">25</span>
+                </div>
+                <div>
+                    <label style="min-width: 150px;">Block Size:</label>
+                    <select id="blockSize" style="width: 100px;">
+                        <option value="8">8x8</option>
+                        <option value="16" selected>16x16</option>
+                        <option value="32">32x32</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+        
+        <div>
+            <button id="startBtn" onclick="startStreaming()">▶️ Start Streaming</button>
+            <button id="stopBtn" onclick="stopStreaming()" disabled>⏹️ Stop Streaming</button>
+        </div>
+        
+        <div id="status" class="status info">📡 Ready to stream</div>
+        
+        <div class="stats">
+            <h3>📊 Statistics</h3>
+            <div class="stat-row">
+                <span class="stat-label">Frames Sent:</span>
+                <span id="frameCount">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Data Sent:</span>
+                <span id="dataSize">0 KB</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Actual FPS:</span>
+                <span id="actualFPS">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Avg Frame Size:</span>
+                <span id="avgFrameSize">0 KB</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Last Frame Type:</span>
+                <span id="frameType">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Changed Blocks:</span>
+                <span id="changedBlocks">0 / 0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Bandwidth Saved:</span>
+                <span id="bandwidthSaved">0%</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Errors:</span>
+                <span id="errorCount">0</span>
+            </div>
+        </div>
+
+        <div style="margin-top: 20px; font-size: 12px; color: #888;">
+            <p>💡 Delta Compression Benefits:</p>
+            <ul style="text-align: left; display: inline-block;">
+                <li><span class="delta-indicator delta-skip"></span> Skip frame: No changes detected (1 byte sent)</li>
+                <li><span class="delta-indicator delta-partial"></span> Partial update: Only changed regions sent (70-90% savings)</li>
+                <li><span class="delta-indicator delta-full"></span> Full frame: Major changes detected (0% savings)</li>
+                <li>Best for: Screen sharing, presentations, code editing</li>
+                <li>Lower threshold = more sensitive to changes</li>
+                <li>Larger block size = faster processing, less precision</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const statusDiv = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        
+        let streaming = false;
+        let frameCount = 0;
+        let errorCount = 0;
+        let totalDataSize = 0;
+        let totalDataWithoutDelta = 0;
+        let lastFrameTime = 0;
+        let fpsHistory = [];
+        
+        let ws = null;
+        let wsConnected = false;
+        let previousImageData = null;
+
+        // Update UI value displays
+        document.getElementById('quality').addEventListener('input', (e) => {
+            document.getElementById('qualityValue').textContent = e.target.value;
+        });
+        
+        document.getElementById('changeThreshold').addEventListener('input', (e) => {
+            document.getElementById('thresholdValue').textContent = e.target.value;
+        });
+
+        document.getElementById('deltaMode').addEventListener('change', (e) => {
+            document.getElementById('deltaSettings').style.display = e.target.checked ? 'flex' : 'none';
+            previousImageData = null; // Reset on mode change
+        });
+
+        function getDisplayDimensions() {
+            const [width, height] = document.getElementById('displaySize').value.split('x').map(Number);
+            return { width, height };
+        }
+
+        function updateStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+        }
+
+        function updateStats(frameSize, frameType, changedBlocks, totalBlocks) {
+            const now = Date.now();
+            if (lastFrameTime > 0) {
+                const fps = 1000 / (now - lastFrameTime);
+                fpsHistory.push(fps);
+                if (fpsHistory.length > 10) fpsHistory.shift();
+                const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+                document.getElementById('actualFPS').textContent = avgFps.toFixed(1);
+            }
+            lastFrameTime = now;
+            
+            document.getElementById('frameCount').textContent = frameCount;
+            document.getElementById('dataSize').textContent = (totalDataSize / 1024).toFixed(1) + ' KB';
+            document.getElementById('avgFrameSize').textContent = frameCount > 0 ? 
+                ((totalDataSize / frameCount) / 1024).toFixed(2) + ' KB' : '0 KB';
+            document.getElementById('errorCount').textContent = errorCount;
+            
+            // Update delta-specific stats
+            let typeIndicator = '';
+            if (frameType === 'skip') {
+                typeIndicator = '⏭️ Skip (no changes)';
+                document.getElementById('frameType').innerHTML = typeIndicator + ' <span class="delta-indicator delta-skip"></span>';
+            } else if (frameType === 'delta') {
+                typeIndicator = '📦 Partial (' + changedBlocks + ' blocks)';
+                document.getElementById('frameType').innerHTML = typeIndicator + ' <span class="delta-indicator delta-partial"></span>';
+            } else {
+                typeIndicator = '🖼️ Full frame';
+                document.getElementById('frameType').innerHTML = typeIndicator + ' <span class="delta-indicator delta-full"></span>';
+            }
+            
+            document.getElementById('changedBlocks').textContent = changedBlocks + ' / ' + totalBlocks;
+            
+            if (totalDataWithoutDelta > 0) {
+                const savedPercent = ((1 - totalDataSize / totalDataWithoutDelta) * 100).toFixed(1);
+                document.getElementById('bandwidthSaved').textContent = savedPercent + '%';
+            }
+        }
+
+        async function startStreaming() {
+            try {
+                streaming = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                
+                updateStatus('🔌 Connecting to ESP32...', 'info');
+                
+                const sourceType = document.getElementById('sourceType').value;
+                let stream;
+                
+                if (sourceType === 'screen') {
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: {
+                            cursor: 'always',
+                            displaySurface: 'monitor'
+                        }
+                    });
+                } else {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { 
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        }
+                    });
+                }
+                
+                video.srcObject = stream;
+                await new Promise(resolve => video.onloadedmetadata = resolve);
+                
+                const espAddress = document.getElementById('espAddress').value;
+                const isMono = document.getElementById('monoMode').checked;
+                const wsEndpoint = isMono ? 'ws-mono' : 'ws';
+                const wsUrl = `ws://${espAddress}/${wsEndpoint}`;
+                
+                ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer';
+                
+                ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    wsConnected = true;
+                    updateStatus('✅ Connected - Streaming...', 'success');
+                    previousImageData = null; // Reset delta tracking
+                    sendFrames();
+                };
+                
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateStatus('❌ Connection failed', 'error');
+                    errorCount++;
+                    wsConnected = false;
+                };
+                
+                ws.onclose = () => {
+                    console.log('WebSocket closed');
+                    wsConnected = false;
+                    if (streaming) {
+                        updateStatus('⚠️ Connection lost', 'warning');
+                    }
+                };
+                
+            } catch (err) {
+                updateStatus('❌ Error: ' + err.message, 'error');
+                console.error('Stream error:', err);
+                streaming = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+        }
+
+        function stopStreaming() {
+            streaming = false;
+            if (ws && wsConnected) {
+                ws.close();
+                ws = null;
+                wsConnected = false;
+            }
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            previousImageData = null;
+            updateStatus('⏹️ Streaming stopped', 'info');
+        }
+
+        function detectChangedBlocks(currentData, previousData, blockSize, threshold) {
+            const dims = getDisplayDimensions();
+            const width = dims.width;
+            const height = dims.height;
+            const blocksX = Math.ceil(width / blockSize);
+            const blocksY = Math.ceil(height / blockSize);
+            const changedBlocks = [];
+            
+            for (let by = 0; by < blocksY; by++) {
+                for (let bx = 0; bx < blocksX; bx++) {
+                    if (isBlockChanged(currentData, previousData, bx * blockSize, by * blockSize, 
+                                      blockSize, blockSize, width, height, threshold)) {
+                        changedBlocks.push({ x: bx, y: by });
+                    }
+                }
+            }
+            
+            return changedBlocks;
+        }
+
+        function isBlockChanged(currentData, previousData, startX, startY, blockW, blockH, 
+                               imageWidth, imageHeight, threshold) {
+            const endX = Math.min(startX + blockW, imageWidth);
+            const endY = Math.min(startY + blockH, imageHeight);
+            let diffCount = 0;
+            let totalPixels = 0;
+            
+            for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                    const idx = (y * imageWidth + x) * 4;
+                    const rDiff = Math.abs(currentData[idx] - previousData[idx]);
+                    const gDiff = Math.abs(currentData[idx + 1] - previousData[idx + 1]);
+                    const bDiff = Math.abs(currentData[idx + 2] - previousData[idx + 2]);
+                    const avgDiff = (rDiff + gDiff + bDiff) / 3;
+                    
+                    if (avgDiff > threshold) {
+                        diffCount++;
+                    }
+                    totalPixels++;
+                }
+            }
+            
+            // Block is changed if more than 10% of pixels differ
+            return (diffCount / totalPixels) > 0.1;
+        }
+
+        function mergeAdjacentBlocks(blocks, blocksX, blocksY) {
+            if (blocks.length === 0) return [];
+            
+            // Create a grid map
+            const grid = new Array(blocksY).fill(0).map(() => new Array(blocksX).fill(false));
+            blocks.forEach(b => grid[b.y][b.x] = true);
+            
+            const rectangles = [];
+            const visited = new Array(blocksY).fill(0).map(() => new Array(blocksX).fill(false));
+            
+            for (let by = 0; by < blocksY; by++) {
+                for (let bx = 0; bx < blocksX; bx++) {
+                    if (grid[by][bx] && !visited[by][bx]) {
+                        // Find rectangle starting at (bx, by)
+                        let width = 0;
+                        let height = 1;
+                        
+                        // Extend width
+                        while (bx + width < blocksX && grid[by][bx + width] && !visited[by][bx + width]) {
+                            width++;
+                        }
+                        
+                        // Extend height
+                        let canExtendHeight = true;
+                        while (canExtendHeight && by + height < blocksY) {
+                            for (let x = 0; x < width; x++) {
+                                if (!grid[by + height][bx + x] || visited[by + height][bx + x]) {
+                                    canExtendHeight = false;
+                                    break;
+                                }
+                            }
+                            if (canExtendHeight) height++;
+                        }
+                        
+                        // Mark as visited
+                        for (let y = 0; y < height; y++) {
+                            for (let x = 0; x < width; x++) {
+                                visited[by + y][bx + x] = true;
+                            }
+                        }
+                        
+                        rectangles.push({ bx, by, bw: width, bh: height });
+                    }
+                }
+            }
+            
+            return rectangles;
+        }
+
+        async function sendFrames() {
+            if (!streaming || !wsConnected || !ws) return;
+
+            const dims = getDisplayDimensions();
+            const isMono = document.getElementById('monoMode').checked;
+            const deltaEnabled = document.getElementById('deltaMode').checked;
+            const blockSize = parseInt(document.getElementById('blockSize').value);
+            const threshold = parseInt(document.getElementById('changeThreshold').value);
+            const quality = parseFloat(document.getElementById('quality').value);
+            
+            if (video.videoWidth && video.videoHeight) {
+                canvas.width = dims.width;
+                canvas.height = dims.height;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const currentImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                // Convert to grayscale if monochrome mode
+                if (isMono) {
+                    const data = currentImageData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                        data[i] = data[i + 1] = data[i + 2] = gray;
+                    }
+                    ctx.putImageData(currentImageData, 0, 0);
+                }
+                
+                // Delta compression logic
+                if (deltaEnabled && previousImageData && 
+                    previousImageData.width === currentImageData.width &&
+                    previousImageData.height === currentImageData.height) {
+                    
+                    const changedBlocks = detectChangedBlocks(
+                        currentImageData.data, 
+                        previousImageData.data, 
+                        blockSize, 
+                        threshold
+                    );
+                    
+                    const blocksX = Math.ceil(canvas.width / blockSize);
+                    const blocksY = Math.ceil(canvas.height / blockSize);
+                    const totalBlocks = blocksX * blocksY;
+                    const changedPercent = (changedBlocks.length / totalBlocks);
+                    
+                    if (changedBlocks.length === 0) {
+                        // No changes - send skip frame (1 byte)
+                        const skipFrame = new Uint8Array([2]); // Type 2 = skip
+                        ws.send(skipFrame.buffer);
+                        frameCount++;
+                        totalDataSize += 1;
+                        updateStats(1, 'skip', 0, totalBlocks);
+                    } else if (changedPercent < 0.5) {
+                        // Partial update - send only changed regions
+                        const rectangles = mergeAdjacentBlocks(changedBlocks, blocksX, blocksY);
+                        
+                        for (const rect of rectangles) {
+                            const x = rect.bx * blockSize;
+                            const y = rect.by * blockSize;
+                            const w = Math.min(rect.bw * blockSize, canvas.width - x);
+                            const h = Math.min(rect.bh * blockSize, canvas.height - y);
+                            
+                            // Create temporary canvas for this region
+                            const tempCanvas = document.createElement('canvas');
+                            tempCanvas.width = w;
+                            tempCanvas.height = h;
+                            const tempCtx = tempCanvas.getContext('2d');
+                            tempCtx.putImageData(
+                                ctx.getImageData(x, y, w, h), 
+                                0, 0
+                            );
+                            
+                            // Encode region as JPEG
+                            await new Promise(resolve => {
+                                tempCanvas.toBlob(async (blob) => {
+                                    if (blob && streaming && wsConnected) {
+                                        const jpegData = new Uint8Array(await blob.arrayBuffer());
+                                        
+                                        // Create message: [type:1][x:2][y:2][w:2][h:2][jpegData]
+                                        const message = new Uint8Array(9 + jpegData.length);
+                                        message[0] = 1; // Type 1 = delta
+                                        message[1] = (x >> 8) & 0xFF;
+                                        message[2] = x & 0xFF;
+                                        message[3] = (y >> 8) & 0xFF;
+                                        message[4] = y & 0xFF;
+                                        message[5] = (w >> 8) & 0xFF;
+                                        message[6] = w & 0xFF;
+                                        message[7] = (h >> 8) & 0xFF;
+                                        message[8] = h & 0xFF;
+                                        message.set(jpegData, 9);
+                                        
+                                        ws.send(message.buffer);
+                                        totalDataSize += message.length;
+                                        frameCount++;
+                                    }
+                                    resolve();
+                                }, 'image/jpeg', quality);
+                            });
+                        }
+                        
+                        // Estimate full frame size for bandwidth calculation
+                        canvas.toBlob((blob) => {
+                            if (blob) totalDataWithoutDelta += blob.size;
+                        }, 'image/jpeg', quality);
+                        
+                        updateStats(totalDataSize, 'delta', changedBlocks.length, totalBlocks);
+                    } else {
+                        // Major changes - send full frame
+                        await sendFullFrame(canvas, quality);
+                        updateStats(totalDataSize, 'full', totalBlocks, totalBlocks);
+                    }
+                } else {
+                    // First frame or delta disabled - send full frame
+                    await sendFullFrame(canvas, quality);
+                    const blocksX = Math.ceil(canvas.width / blockSize);
+                    const blocksY = Math.ceil(canvas.height / blockSize);
+                    updateStats(totalDataSize, 'full', blocksX * blocksY, blocksX * blocksY);
+                }
+                
+                previousImageData = currentImageData;
+            }
+            
+            // Schedule next frame
+            const targetFPS = parseInt(document.getElementById('frameRate').value);
+            const delay = 1000 / targetFPS;
+            setTimeout(sendFrames, delay);
+        }
+
+        async function sendFullFrame(canvas, quality) {
+            return new Promise(resolve => {
+                canvas.toBlob(async (blob) => {
+                    if (blob && streaming && wsConnected) {
+                        const jpegData = new Uint8Array(await blob.arrayBuffer());
+                        
+                        // Create message: [type:0][jpegData]
+                        const message = new Uint8Array(1 + jpegData.length);
+                        message[0] = 0; // Type 0 = full frame
+                        message.set(jpegData, 1);
+                        
+                        ws.send(message.buffer);
+                        frameCount++;
+                        totalDataSize += message.length;
+                        totalDataWithoutDelta += blob.size;
+                    }
+                    resolve();
+                }, 'image/jpeg', quality);
+            });
+        }
+    </script>
+</body>
+</html>
