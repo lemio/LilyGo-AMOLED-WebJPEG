@@ -149,6 +149,12 @@
                 <input type="range" id="quality" class="quality-slider" value="0.7" min="0.1" max="1.0" step="0.1">
                 <span id="qualityValue">0.7</span>
             </div>
+            <div>
+                <label>
+                    <input type="checkbox" id="monoMode" style="margin-right: 8px;">
+                    🎨 Monochrome Mode (faster, smaller files)
+                </label>
+            </div>
         </div>
 
         <video id="video" autoplay playsinline></video>
@@ -203,6 +209,7 @@
         const customSizeDiv = document.getElementById('customSizeDiv');
         const customWidthInput = document.getElementById('customWidth');
         const customHeightInput = document.getElementById('customHeight');
+        const monoModeCheckbox = document.getElementById('monoMode');
         
         let streaming = false;
         let frameCount = 0;
@@ -277,9 +284,11 @@
             try {
                 // Connect WebSocket first
                 const espAddress = espAddressInput.value.trim();
-                const wsUrl = espAddress.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws';
+                const isMono = monoModeCheckbox.checked;
+                const wsEndpoint = isMono ? '/ws-mono' : '/ws';
+                const wsUrl = espAddress.replace('http://', 'ws://').replace('https://', 'wss://') + wsEndpoint;
                 
-                updateStatus('🔌 Connecting to ESP32...', 'info');
+                updateStatus(`🔌 Connecting to ${isMono ? 'monochrome' : 'color'} WebSocket...`, 'info');
                 
                 ws = new WebSocket(wsUrl);
                 ws.binaryType = 'arraybuffer';
@@ -393,6 +402,7 @@
 
             // Get display dimensions from settings
             const displayDims = getDisplayDimensions();
+            const isMono = monoModeCheckbox.checked;
             
             // Set canvas size to match ESP32 display
             if (video.videoWidth && video.videoHeight) {
@@ -401,6 +411,23 @@
 
                 // Draw current video frame to canvas (scaled to display size)
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Convert to grayscale if monochrome mode
+                if (isMono) {
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+                    
+                    // Convert to grayscale using luminance formula
+                    for (let i = 0; i < data.length; i += 4) {
+                        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                        data[i] = gray;     // R
+                        data[i + 1] = gray; // G
+                        data[i + 2] = gray; // B
+                        // Alpha stays the same
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+                }
 
                 // Convert to JPEG blob
                 const quality = parseFloat(qualitySlider.value);

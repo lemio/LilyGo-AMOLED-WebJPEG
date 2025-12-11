@@ -88,8 +88,9 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
     // Check if JPEG matches display size exactly - if so, render directly
     bool directRender = (w == WIDTH && h == HEIGHT);
     
-    Serial.printf("JPEG: %dx%d | Display: %dx%d | Direct: %s\n", 
-                  w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO");
+    Serial.printf("JPEG: %dx%d | Display: %dx%d | Direct: %s | MCU: %dx%d\n", 
+                  w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO", 
+                  JpegDec.MCUWidth, JpegDec.MCUHeight);
     
     if (!directRender) {
         // Need to center - use sprite buffer
@@ -112,30 +113,68 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
     while (JpegDec.read()) {
         uint16_t *pImg = JpegDec.pImage;
         
-        // Calculate MCU position
+        // Calculate MCU position in the image
         uint16_t mcu_x = JpegDec.MCUx * mcu_w;
         uint16_t mcu_y = JpegDec.MCUy * mcu_h;
         
-        // Calculate actual block dimensions (handle edge blocks)
-        uint16_t win_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
-        uint16_t win_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
+        // Skip if MCU is completely outside image bounds
+        if (mcu_x >= w || mcu_y >= h) continue;
         
-        // Swap bytes for correct color display (RGB565 byte order)
-        swapBytes(pImg, win_w * win_h);
+        // Calculate actual valid pixels in this MCU (clipped to image bounds)
+        uint16_t valid_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
+        uint16_t valid_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
         
-        // Calculate destination
+        if (valid_w == 0 || valid_h == 0) continue;
+        
+        // Calculate destination on display
         int16_t destX = offsetX + mcu_x;
         int16_t destY = offsetY + mcu_y;
         
-        // Skip blocks outside display bounds
+        // Skip if destination is outside display bounds
         if (destX >= WIDTH || destY >= HEIGHT) continue;
         
-        if (directRender) {
-            // Render directly to display - fastest path!
-            amoled.pushColors(destX, destY, win_w, win_h, pImg);
+        // Calculate actual render dimensions (clipped to display bounds)
+        uint16_t render_w = valid_w;
+        uint16_t render_h = valid_h;
+        
+        if (destX + render_w > WIDTH) {
+            render_w = WIDTH - destX;
+        }
+        if (destY + render_h > HEIGHT) {
+            render_h = HEIGHT - destY;
+        }
+        
+        if (render_w == 0 || render_h == 0) continue;
+        
+        // For edge blocks, we need to extract only the valid portion from the MCU
+        if (render_w != mcu_w || render_h != mcu_h) {
+            // Create temporary buffer for the valid portion
+            uint16_t tempBuffer[render_w * render_h];
+            
+            // Copy valid pixels row by row from MCU buffer
+            for (uint16_t row = 0; row < render_h; row++) {
+                for (uint16_t col = 0; col < render_w; col++) {
+                    uint16_t pixel = pImg[row * mcu_w + col];
+                    tempBuffer[row * render_w + col] = (pixel >> 8) | (pixel << 8); // Swap bytes
+                }
+            }
+            
+            if (directRender) {
+                amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
+            } else {
+                spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
+            }
         } else {
-            // Render to sprite buffer
-            spr.pushImage(destX, destY, win_w, win_h, pImg);
+            // Full MCU block - swap all pixels at once
+            swapBytes(pImg, mcu_w * mcu_h);
+            
+            if (directRender) {
+                // Render directly to display - fastest path!
+                amoled.pushColors(destX, destY, render_w, render_h, pImg);
+            } else {
+                // Render to sprite buffer
+                spr.pushImage(destX, destY, render_w, render_h, pImg);
+            }
         }
     }
     
@@ -196,21 +235,51 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
         uint16_t mcu_x = JpegDec.MCUx * mcu_w;
         uint16_t mcu_y = JpegDec.MCUy * mcu_h;
         
-        uint16_t win_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
-        uint16_t win_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
+        uint16_t render_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
+        uint16_t render_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
         
-        // Swap bytes for monochrome too
-        swapBytes(pImg, win_w * win_h);
+        // Bounds check - ensure we don't exceed image dimensions
+        if (mcu_x >= w || mcu_y >= h) continue;
+        if (render_w == 0 || render_h == 0) continue;
         
         int16_t destX = offsetX + mcu_x;
         int16_t destY = offsetY + mcu_y;
         
         if (destX >= WIDTH || destY >= HEIGHT) continue;
         
-        if (directRender) {
-            amoled.pushColors(destX, destY, win_w, win_h, pImg);
+        // Clip width/height to display bounds
+        if (destX + render_w > WIDTH) {
+            render_w = WIDTH - destX;
+        }
+        if (destY + render_h > HEIGHT) {
+            render_h = HEIGHT - destY;
+        }
+        
+        // Handle partial MCU blocks at edges
+        if (render_w != mcu_w || render_h != mcu_h) {
+            // Edge block - extract only valid pixels to avoid padding artifacts
+            uint16_t tempBuffer[render_w * render_h];
+            for (uint16_t row = 0; row < render_h; row++) {
+                for (uint16_t col = 0; col < render_w; col++) {
+                    uint16_t pixel = pImg[row * mcu_w + col];
+                    tempBuffer[row * render_w + col] = (pixel >> 8) | (pixel << 8);
+                }
+            }
+            
+            if (directRender) {
+                amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
+            } else {
+                spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
+            }
         } else {
-            spr.pushImage(destX, destY, win_w, win_h, pImg);
+            // Full MCU block - swap bytes in place
+            swapBytes(pImg, render_w * render_h);
+            
+            if (directRender) {
+                amoled.pushColors(destX, destY, render_w, render_h, pImg);
+            } else {
+                spr.pushImage(destX, destY, render_w, render_h, pImg);
+            }
         }
     }
     
@@ -620,9 +689,14 @@ void loop()
                 // Cast away volatile for function call
                 uint8_t* bufPtr = (uint8_t*)frameBuffer;
                 size_t bufSize = frameSize;
+                bool isMono = isMonochrome;
                 
-                // Draw JPEG to display
-                drawJPEG(bufPtr, bufSize);
+                // Draw JPEG to display (color or monochrome)
+                if (isMono) {
+                    drawMonoJPEG(bufPtr, bufSize);
+                } else {
+                    drawJPEG(bufPtr, bufSize);
+                }
                 
                 // Track performance
                 frameCount++;
@@ -632,6 +706,7 @@ void loop()
                 free(bufPtr);
                 frameBuffer = nullptr;
                 frameSize = 0;
+                isMonochrome = false;
             }
             
             newFrameAvailable = false;
