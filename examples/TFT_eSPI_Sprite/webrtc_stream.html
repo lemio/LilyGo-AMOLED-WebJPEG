@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Video Stream Client</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+        video {
+            max-width: 100%;
+            width: 640px;
+            border: 3px solid #333;
+            border-radius: 10px;
+            margin: 20px 0;
+            background: #000;
+        }
+        button {
+            padding: 15px 40px;
+            font-size: 18px;
+            margin: 10px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            transition: all 0.3s;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+        }
+        button:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        .success { background: #4CAF50; }
+        .error { background: #f44336; }
+        .info { background: #2196F3; }
+        .warning { background: #ff9800; }
+        .stats {
+            background: rgba(33, 33, 33, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+        }
+        .stats div {
+            margin: 5px 0;
+        }
+        .config {
+            background: rgba(33, 33, 33, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: left;
+        }
+        .config label {
+            display: inline-block;
+            width: 150px;
+            margin: 10px 0;
+        }
+        .config input {
+            width: 200px;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #555;
+            background: #222;
+            color: white;
+        }
+        .quality-slider {
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 ESP32 AMOLED Video Stream</h1>
+        <p>Stream your webcam to ESP32 display via WiFi</p>
+        
+        <div class="config">
+            <h3>⚙️ Configuration</h3>
+            <div>
+                <label>ESP32 Address:</label>
+                <input type="text" id="espAddress" value="http://esp.local" placeholder="http://esp.local">
+            </div>
+            <div>
+                <label>Display Size:</label>
+                <select id="displaySize" style="width: 200px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
+                    <option value="536x240" selected>536x240 (1.91" AMOLED)</option>
+                    <option value="450x600">450x600 (2.41" AMOLED)</option>
+                    <option value="194x368">194x368 (1.47" AMOLED)</option>
+                    <option value="custom">Custom...</option>
+                </select>
+            </div>
+            <div id="customSizeDiv" style="display: none;">
+                <label>Custom Size:</label>
+                <input type="number" id="customWidth" placeholder="Width" style="width: 90px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
+                x
+                <input type="number" id="customHeight" placeholder="Height" style="width: 90px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
+            </div>
+            <div>
+                <label>Source:</label>
+                <select id="sourceType" style="width: 200px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
+                    <option value="camera">📹 Webcam</option>
+                    <option value="screen">🖥️ Screen Share</option>
+                </select>
+            </div>
+            <div>
+                <label>Frame Rate (FPS):</label>
+                <input type="number" id="frameRate" value="1" min="1" max="30">
+            </div>
+            <div>
+                <label>JPEG Quality:</label>
+                <input type="range" id="quality" class="quality-slider" value="0.2" min="0.1" max="1.0" step="0.1">
+                <span id="qualityValue">0.7</span>
+            </div>
+        </div>
+
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+        
+        <div>
+            <button id="startBtn" onclick="startStreaming()">▶️ Start Streaming</button>
+            <button id="stopBtn" onclick="stopStreaming()" disabled>⏹️ Stop Streaming</button>
+        </div>
+        
+        <div id="status" class="status info">📡 Ready to stream</div>
+        
+        <div class="stats">
+            <h3>📊 Statistics</h3>
+            <div id="stats">
+                <div>Frames Sent: <span id="frameCount">0</span></div>
+                <div>Errors: <span id="errorCount">0</span></div>
+                <div>Data Sent: <span id="dataSize">0 KB</span></div>
+                <div>Actual FPS: <span id="actualFPS">0</span></div>
+                <div>Avg Frame Size: <span id="avgFrameSize">0 KB</span></div>
+            </div>
+        </div>
+
+        <div style="margin-top: 20px; font-size: 12px; color: #888;">
+            <p>💡 Tips:</p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>Make sure your ESP32 is connected to WiFi</li>
+                <li>ESP32 should be accessible at <code>esp.local</code></li>
+                <li>Select the correct display size for your AMOLED screen</li>
+                <li>Video is automatically scaled to match display dimensions</li>
+                <li>Choose between webcam or screen capture</li>
+                <li>Screen share works in Chrome, Edge, and Firefox</li>
+                <li>Lower frame rate or quality if stream is laggy</li>
+                <li>Grant camera/screen permissions when prompted</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const espAddressInput = document.getElementById('espAddress');
+        const frameRateInput = document.getElementById('frameRate');
+        const qualitySlider = document.getElementById('quality');
+        const qualityValue = document.getElementById('qualityValue');
+        const sourceTypeSelect = document.getElementById('sourceType');
+        const displaySizeSelect = document.getElementById('displaySize');
+        const customSizeDiv = document.getElementById('customSizeDiv');
+        const customWidthInput = document.getElementById('customWidth');
+        const customHeightInput = document.getElementById('customHeight');
+        
+        let streaming = false;
+        let frameCount = 0;
+        let errorCount = 0;
+        let totalDataSize = 0;
+        let lastFrameTime = 0;
+        let fpsHistory = [];
+        let frameSizeHistory = [];
+
+        // Update quality value display
+        qualitySlider.addEventListener('input', (e) => {
+            qualityValue.textContent = e.target.value;
+        });
+
+        // Handle display size selection
+        displaySizeSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'custom') {
+                customSizeDiv.style.display = 'block';
+            } else {
+                customSizeDiv.style.display = 'none';
+            }
+        });
+
+        // Function to get current display dimensions
+        function getDisplayDimensions() {
+            const sizeValue = displaySizeSelect.value;
+            if (sizeValue === 'custom') {
+                const w = parseInt(customWidthInput.value) || 536;
+                const h = parseInt(customHeightInput.value) || 240;
+                return { width: w, height: h };
+            } else {
+                const [width, height] = sizeValue.split('x').map(Number);
+                return { width, height };
+            }
+        }
+
+        function updateStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+        }
+
+        function updateStats(frameSize) {
+            document.getElementById('frameCount').textContent = frameCount;
+            document.getElementById('errorCount').textContent = errorCount;
+            document.getElementById('dataSize').textContent = (totalDataSize / 1024).toFixed(2);
+            
+            // Calculate FPS
+            const now = Date.now();
+            if (lastFrameTime > 0) {
+                const fps = 1000 / (now - lastFrameTime);
+                fpsHistory.push(fps);
+                if (fpsHistory.length > 10) fpsHistory.shift();
+                const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+                document.getElementById('actualFPS').textContent = avgFps.toFixed(1);
+            }
+            lastFrameTime = now;
+
+            // Track frame sizes
+            if (frameSize) {
+                frameSizeHistory.push(frameSize);
+                if (frameSizeHistory.length > 10) frameSizeHistory.shift();
+                const avgSize = frameSizeHistory.reduce((a, b) => a + b, 0) / frameSizeHistory.length;
+                document.getElementById('avgFrameSize').textContent = (avgSize / 1024).toFixed(2);
+            }
+        }
+
+        async function startStreaming() {
+            try {
+                const sourceType = sourceTypeSelect.value;
+                let stream;
+                
+                if (sourceType === 'screen') {
+                    // Request screen capture
+                    updateStatus('🖥️ Requesting screen share...', 'info');
+                    stream = await navigator.mediaDevices.getDisplayMedia({ 
+                        video: { 
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 },
+                            frameRate: { ideal: 30 }
+                        },
+                        audio: false
+                    });
+                } else {
+                    // Request camera access
+                    updateStatus('🎥 Requesting camera access...', 'info');
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        } 
+                    });
+                }
+                
+                video.srcObject = stream;
+                streaming = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                frameCount = 0;
+                errorCount = 0;
+                totalDataSize = 0;
+                fpsHistory = [];
+                frameSizeHistory = [];
+                
+                updateStatus('✅ Streaming active', 'success');
+                
+                // Wait for video to be ready
+                video.onloadedmetadata = () => {
+                    sendFrames();
+                };
+                
+                // Handle stream ending (user stops screen share)
+                stream.getVideoTracks()[0].addEventListener('ended', () => {
+                    console.log('Stream ended by user');
+                    stopStreaming();
+                });
+                
+            } catch (err) {
+                updateStatus('❌ Error: ' + err.message, 'error');
+                console.error('Stream error:', err);
+                
+                if (err.name === 'NotAllowedError') {
+                    updateStatus('❌ Permission denied', 'error');
+                } else if (err.name === 'NotFoundError') {
+                    updateStatus('❌ Source not found', 'error');
+                } else if (err.name === 'NotSupportedError') {
+                    updateStatus('❌ Screen capture not supported', 'error');
+                }
+            }
+        }
+
+        function stopStreaming() {
+            streaming = false;
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            updateStatus('⏹️ Streaming stopped', 'info');
+        }
+
+        async function sendFrames() {
+            if (!streaming) return;
+
+            // Get display dimensions from settings
+            const displayDims = getDisplayDimensions();
+            
+            // Set canvas size to match ESP32 display
+            if (video.videoWidth && video.videoHeight) {
+                canvas.width = displayDims.width;
+                canvas.height = displayDims.height;
+
+                // Draw current video frame to canvas (scaled to display size)
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Convert to JPEG blob
+                const quality = parseFloat(qualitySlider.value);
+                canvas.toBlob(async (blob) => {
+                    if (blob && streaming) {
+                        try {
+                            const espAddress = espAddressInput.value.trim();
+                            const uploadUrl = espAddress + '/upload';
+                            
+                            const response = await fetch(uploadUrl, {
+                                method: 'POST',
+                                body: blob,
+                                headers: { 'Content-Type': 'image/jpeg' },
+                                mode: 'no-cors' // Allow cross-origin requests
+                            });
+                            
+                            // With no-cors mode, we can't check response status
+                            // Assume success if no error thrown
+                            frameCount++;
+                            totalDataSize += blob.size;
+                            updateStats(blob.size);
+                            
+                        } catch (err) {
+                            errorCount++;
+                            updateStats();
+                            console.error('Upload error:', err);
+                            
+                            if (errorCount === 1) {
+                                updateStatus('⚠️ Connection issue - check ESP32 address', 'warning');
+                            }
+                        }
+                    }
+                    
+                    // Schedule next frame based on desired frame rate
+                    if (streaming) {
+                        const fps = parseInt(frameRateInput.value) || 15;
+                        const delay = 1000 / fps;
+                        setTimeout(sendFrames, delay);
+                    }
+                }, 'image/jpeg', quality);
+            } else {
+                // Video not ready, try again
+                if (streaming) {
+                    setTimeout(sendFrames, 100);
+                }
+            }
+        }
+
+        // Auto-detect ESP32 if on local network
+        window.addEventListener('load', () => {
+            console.log('Ready to stream to ESP32');
+        });
+    </script>
+</body>
+</html>
