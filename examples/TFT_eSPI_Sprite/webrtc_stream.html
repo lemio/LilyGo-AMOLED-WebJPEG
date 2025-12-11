@@ -145,6 +145,13 @@
                 <input type="number" id="frameRate" value="6" min="1" max="30">
             </div>
             <div>
+                <label>Image Format:</label>
+                <select id="imageFormat" style="width: 200px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
+                    <option value="png" selected>PNG (Better for screenshots)</option>
+                    <option value="jpeg">JPEG (Smaller for photos)</option>
+                </select>
+            </div>
+            <div id="qualityDiv">
                 <label>JPEG Quality:</label>
                 <input type="range" id="quality" class="quality-slider" value="0.7" min="0.1" max="1.0" step="0.1">
                 <span id="qualityValue">0.7</span>
@@ -185,6 +192,8 @@
                 <li>ESP32 should be accessible at <code>esp.local</code></li>
                 <li>Select the correct display size for your AMOLED screen</li>
                 <li>Video is automatically scaled to match display dimensions</li>
+                <li>PNG format is better for screenshots/UI (lossless)</li>
+                <li>JPEG format is smaller for photo/video content (lossy)</li>
                 <li>Choose between webcam or screen capture</li>
                 <li>Screen share works in Chrome, Edge, and Firefox</li>
                 <li>Lower frame rate or quality if stream is laggy</li>
@@ -210,6 +219,8 @@
         const customWidthInput = document.getElementById('customWidth');
         const customHeightInput = document.getElementById('customHeight');
         const monoModeCheckbox = document.getElementById('monoMode');
+        const imageFormatSelect = document.getElementById('imageFormat');
+        const qualityDiv = document.getElementById('qualityDiv');
         
         let streaming = false;
         let frameCount = 0;
@@ -227,6 +238,18 @@
         qualitySlider.addEventListener('input', (e) => {
             qualityValue.textContent = e.target.value;
         });
+
+        // Handle image format selection
+        imageFormatSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'jpeg') {
+                qualityDiv.style.display = 'block';
+            } else {
+                qualityDiv.style.display = 'none';
+            }
+        });
+
+        // Initialize quality div visibility
+        qualityDiv.style.display = imageFormatSelect.value === 'jpeg' ? 'block' : 'none';
 
         // Handle display size selection
         displaySizeSelect.addEventListener('change', (e) => {
@@ -429,10 +452,12 @@
                     ctx.putImageData(imageData, 0, 0);
                 }
 
-                // Convert to JPEG blob
-                const quality = parseFloat(qualitySlider.value);
+                // Get image format and quality settings
+                const imageFormat = imageFormatSelect.value;
+                const mimeType = imageFormat === 'png' ? 'image/png' : 'image/jpeg';
+                const quality = imageFormat === 'jpeg' ? parseFloat(qualitySlider.value) : undefined;
                 
-                console.log(`Sending frame: ${canvas.width}x${canvas.height}, quality: ${quality}`);
+                console.log(`Sending frame: ${canvas.width}x${canvas.height}, format: ${imageFormat}, quality: ${quality || 'N/A'}`);
                 
                 canvas.toBlob(async (blob) => {
                     if (blob && streaming && wsConnected) {
@@ -464,7 +489,7 @@
                         const delay = 1000 / fps;
                         setTimeout(sendFrames, delay);
                     }
-                }, 'image/jpeg', quality);
+                }, mimeType, quality);
             } else {
                 // Video not ready, try again
                 if (streaming) {

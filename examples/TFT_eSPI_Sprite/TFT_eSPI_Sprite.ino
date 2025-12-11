@@ -10,7 +10,7 @@
  * Required libraries:
  * - ESPAsyncWebServer: https://github.com/me-no-dev/ESPAsyncWebServer
  * - AsyncTCP: https://github.com/me-no-dev/AsyncTCP
- * - JPEGDecoder: https://github.com/Bodmer/JPEGDecoder
+ * - LodePNG (included with LVGL) - better for screenshots!
  */
 
 #include <LilyGo_AMOLED.h>
@@ -19,7 +19,14 @@
 #include <ESPmDNS.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
-#include <JPEGDecoder.h>
+
+// Include LodePNG implementation - this compiles the C code
+#define LODEPNG_COMPILE_DISK 0
+#define LODEPNG_COMPILE_ALLOCATORS 1
+#define LODEPNG_COMPILE_ENCODER 0  // We only need decoder
+#define LODEPNG_COMPILE_ANCILLARY_CHUNKS 0
+#define LODEPNG_COMPILE_ERROR_TEXT 1
+#include "../../libdeps/lvgl/src/extra/libs/png/lodepng.c"
 
 // WiFi credentials
 const char* ssid = "ACNPhone";
@@ -66,233 +73,154 @@ inline void swapBytes(uint16_t *data, size_t count) {
     }
 }
 
-void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
+void drawPNG(uint8_t *pngData, size_t pngSize) {
     uint32_t t1 = millis();
     
-    // Decode JPEG (already scaled to display size by web interface)
-    if (!JpegDec.decodeArray(jpegData, jpegSize)) {
-        Serial.println("JPEG decode failed!");
+    // Decode PNG using lodepng
+    unsigned char* rgba = NULL;
+    unsigned width, height;
+    
+    unsigned error = lodepng_decode32(&rgba, &width, &height, pngData, pngSize);
+    
+    if (error) {
+        Serial.printf("PNG decode error %u: %s\n", error, lodepng_error_text(error));
         return;
     }
     
     uint32_t t2 = millis();
     
-    uint16_t w = JpegDec.width;
-    uint16_t h = JpegDec.height;
-    
-    if (w == 0 || h == 0) {
-        Serial.println("Invalid JPEG dimensions!");
+    if (width == 0 || height == 0) {
+        Serial.println("Invalid PNG dimensions!");
+        free(rgba);
         return;
     }
     
-    // Check if JPEG matches display size exactly - if so, render directly
-    bool directRender = (w == WIDTH && h == HEIGHT);
+    // Check if PNG matches display size exactly
+    bool directRender = (width == WIDTH && height == HEIGHT);
     
-    Serial.printf("JPEG: %dx%d | Display: %dx%d | Direct: %s | MCU: %dx%d\n", 
-                  w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO", 
-                  JpegDec.MCUWidth, JpegDec.MCUHeight);
-    
-    if (!directRender) {
-        // Need to center - use sprite buffer
-        spr.fillSprite(TFT_BLACK);
-    }
-    
-    // Calculate centering offset
-    int16_t offsetX = (WIDTH - w) >> 1;  // Fast divide by 2
-    int16_t offsetY = (HEIGHT - h) >> 1;
-    if (offsetX < 0) offsetX = 0;
-    if (offsetY < 0) offsetY = 0;
-    
-    // Pre-fetch MCU dimensions
-    uint16_t mcu_w = JpegDec.MCUWidth;
-    uint16_t mcu_h = JpegDec.MCUHeight;
+    Serial.printf("PNG: %dx%d | Display: %dx%d | Direct: %s\n", 
+                  width, height, WIDTH, HEIGHT, directRender ? "YES" : "NO");
     
     uint32_t t3 = millis();
     
-    // Render MCU blocks
-    while (JpegDec.read()) {
-        uint16_t *pImg = JpegDec.pImage;
-        
-        // Calculate MCU position in the image
-        uint16_t mcu_x = JpegDec.MCUx * mcu_w;
-        uint16_t mcu_y = JpegDec.MCUy * mcu_h;
-        
-        // Skip if MCU is completely outside image bounds
-        if (mcu_x >= w || mcu_y >= h) continue;
-        
-        // Calculate actual valid pixels in this MCU (clipped to image bounds)
-        uint16_t valid_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
-        uint16_t valid_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
-        
-        if (valid_w == 0 || valid_h == 0) continue;
-        
-        // Calculate destination on display
-        int16_t destX = offsetX + mcu_x;
-        int16_t destY = offsetY + mcu_y;
-        
-        // Skip if destination is outside display bounds
-        if (destX >= WIDTH || destY >= HEIGHT) continue;
-        
-        // Calculate actual render dimensions (clipped to display bounds)
-        uint16_t render_w = valid_w;
-        uint16_t render_h = valid_h;
-        
-        if (destX + render_w > WIDTH) {
-            render_w = WIDTH - destX;
-        }
-        if (destY + render_h > HEIGHT) {
-            render_h = HEIGHT - destY;
-        }
-        
-        if (render_w == 0 || render_h == 0) continue;
-        
-        // For edge blocks, we need to extract only the valid portion from the MCU
-        if (render_w != mcu_w || render_h != mcu_h) {
-            // Create temporary buffer for the valid portion
-            uint16_t tempBuffer[render_w * render_h];
-            
-            // Copy valid pixels row by row from MCU buffer
-            for (uint16_t row = 0; row < render_h; row++) {
-                for (uint16_t col = 0; col < render_w; col++) {
-                    uint16_t pixel = pImg[row * mcu_w + col];
-                    tempBuffer[row * render_w + col] = (pixel >> 8) | (pixel << 8); // Swap bytes
-                }
-            }
-            
-            if (directRender) {
-                amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
-            }
-        } else {
-            // Full MCU block - swap all pixels at once
-            swapBytes(pImg, mcu_w * mcu_h);
-            
-            if (directRender) {
-                // Render directly to display - fastest path!
-                amoled.pushColors(destX, destY, render_w, render_h, pImg);
-            } else {
-                // Render to sprite buffer
-                spr.pushImage(destX, destY, render_w, render_h, pImg);
-            }
-        }
+    // Convert RGBA to RGB565
+    size_t pixelCount = width * height;
+    uint16_t* rgb565 = (uint16_t*)malloc(pixelCount * sizeof(uint16_t));
+    if (!rgb565) {
+        Serial.println("RGB565 malloc failed!");
+        free(rgba);
+        return;
     }
+    
+    // Convert RGBA8888 to RGB565 with byte swapping
+    for (size_t i = 0; i < pixelCount; i++) {
+        uint8_t r = rgba[i * 4 + 0];
+        uint8_t g = rgba[i * 4 + 1];
+        uint8_t b = rgba[i * 4 + 2];
+        // Convert to RGB565 and swap bytes for display
+        uint16_t color = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        rgb565[i] = (color >> 8) | (color << 8);
+    }
+    
+    free(rgba);
     
     uint32_t t4 = millis();
     
-    // Push sprite to display only if we used buffering
     if (!directRender) {
+        // Center the image
+        spr.fillSprite(TFT_BLACK);
+        int16_t offsetX = (WIDTH - width) >> 1;
+        int16_t offsetY = (HEIGHT - height) >> 1;
+        if (offsetX < 0) offsetX = 0;
+        if (offsetY < 0) offsetY = 0;
+        
+        spr.pushImage(offsetX, offsetY, width, height, rgb565);
         amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
+    } else {
+        // Direct render - fastest!
+        amoled.pushColors(0, 0, width, height, rgb565);
     }
+    
+    free(rgb565);
     
     uint32_t t5 = millis();
     
-    Serial.printf("Timing: Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
-                  t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
+    Serial.printf("Timing: Decode=%lums | Convert=%lums | Render=%lums | Total=%lums\n",
+                  t2-t1, t4-t3, t5-t4, t5-t1);
 }
 
-void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
+void drawMonoPNG(uint8_t *pngData, size_t pngSize) {
     uint32_t t1 = millis();
     
-    // Decode JPEG (grayscale)
-    if (!JpegDec.decodeArray(jpegData, jpegSize)) {
-        Serial.println("Mono JPEG decode failed!");
+    // Decode PNG using lodepng
+    unsigned char* rgba = NULL;
+    unsigned width, height;
+    
+    unsigned error = lodepng_decode32(&rgba, &width, &height, pngData, pngSize);
+    
+    if (error) {
+        Serial.printf("Mono PNG decode error %u: %s\n", error, lodepng_error_text(error));
         return;
     }
     
     uint32_t t2 = millis();
     
-    uint16_t w = JpegDec.width;
-    uint16_t h = JpegDec.height;
-    
-    if (w == 0 || h == 0) {
-        Serial.println("Invalid JPEG dimensions!");
+    if (width == 0 || height == 0) {
+        Serial.println("Invalid PNG dimensions!");
+        free(rgba);
         return;
     }
     
-    Serial.printf("Mono JPEG: %dx%d | Display: %dx%d\n", w, h, WIDTH, HEIGHT);
+    Serial.printf("Mono PNG: %dx%d | Display: %dx%d\n", width, height, WIDTH, HEIGHT);
     
-    bool directRender = (w == WIDTH && h == HEIGHT);
-    
-    if (!directRender) {
-        spr.fillSprite(TFT_BLACK);
-    }
-    
-    int16_t offsetX = (WIDTH - w) >> 1;
-    int16_t offsetY = (HEIGHT - h) >> 1;
-    if (offsetX < 0) offsetX = 0;
-    if (offsetY < 0) offsetY = 0;
-    
-    uint16_t mcu_w = JpegDec.MCUWidth;
-    uint16_t mcu_h = JpegDec.MCUHeight;
+    bool directRender = (width == WIDTH && height == HEIGHT);
     
     uint32_t t3 = millis();
     
-    // Render MCU blocks - grayscale to display
-    while (JpegDec.read()) {
-        uint16_t *pImg = JpegDec.pImage;
-        
-        uint16_t mcu_x = JpegDec.MCUx * mcu_w;
-        uint16_t mcu_y = JpegDec.MCUy * mcu_h;
-        
-        uint16_t render_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
-        uint16_t render_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
-        
-        // Bounds check - ensure we don't exceed image dimensions
-        if (mcu_x >= w || mcu_y >= h) continue;
-        if (render_w == 0 || render_h == 0) continue;
-        
-        int16_t destX = offsetX + mcu_x;
-        int16_t destY = offsetY + mcu_y;
-        
-        if (destX >= WIDTH || destY >= HEIGHT) continue;
-        
-        // Clip width/height to display bounds
-        if (destX + render_w > WIDTH) {
-            render_w = WIDTH - destX;
-        }
-        if (destY + render_h > HEIGHT) {
-            render_h = HEIGHT - destY;
-        }
-        
-        // Handle partial MCU blocks at edges
-        if (render_w != mcu_w || render_h != mcu_h) {
-            // Edge block - extract only valid pixels to avoid padding artifacts
-            uint16_t tempBuffer[render_w * render_h];
-            for (uint16_t row = 0; row < render_h; row++) {
-                for (uint16_t col = 0; col < render_w; col++) {
-                    uint16_t pixel = pImg[row * mcu_w + col];
-                    tempBuffer[row * render_w + col] = (pixel >> 8) | (pixel << 8);
-                }
-            }
-            
-            if (directRender) {
-                amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
-            }
-        } else {
-            // Full MCU block - swap bytes in place
-            swapBytes(pImg, render_w * render_h);
-            
-            if (directRender) {
-                amoled.pushColors(destX, destY, render_w, render_h, pImg);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, pImg);
-            }
-        }
+    // Convert RGBA to grayscale RGB565
+    size_t pixelCount = width * height;
+    uint16_t* rgb565 = (uint16_t*)malloc(pixelCount * sizeof(uint16_t));
+    if (!rgb565) {
+        Serial.println("RGB565 malloc failed!");
+        free(rgba);
+        return;
     }
+    
+    // Convert RGBA to grayscale RGB565
+    for (size_t i = 0; i < pixelCount; i++) {
+        uint8_t r = rgba[i * 4 + 0];
+        uint8_t g = rgba[i * 4 + 1];
+        uint8_t b = rgba[i * 4 + 2];
+        // Calculate grayscale
+        uint8_t gray = (r * 30 + g * 59 + b * 11) / 100;
+        // Convert to RGB565 and swap bytes
+        uint16_t color = ((gray & 0xF8) << 8) | ((gray & 0xFC) << 3) | (gray >> 3);
+        rgb565[i] = (color >> 8) | (color << 8);
+    }
+    
+    free(rgba);
     
     uint32_t t4 = millis();
     
     if (!directRender) {
+        spr.fillSprite(TFT_BLACK);
+        int16_t offsetX = (WIDTH - width) >> 1;
+        int16_t offsetY = (HEIGHT - height) >> 1;
+        if (offsetX < 0) offsetX = 0;
+        if (offsetY < 0) offsetY = 0;
+        
+        spr.pushImage(offsetX, offsetY, width, height, rgb565);
         amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
+    } else {
+        amoled.pushColors(0, 0, width, height, rgb565);
     }
+    
+    free(rgb565);
     
     uint32_t t5 = millis();
     
-    Serial.printf("Mono Timing: Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
-                  t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
+    Serial.printf("Mono Timing: Decode=%lums | Convert=%lums | Render=%lums | Total=%lums\n",
+                  t2-t1, t4-t3, t5-t4, t5-t1);
 }
 
 void setupWiFi() {
@@ -427,14 +355,14 @@ void setupWebServer() {
             // Draw current video frame to canvas
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Convert to JPEG blob
+            // Convert to PNG blob (better for screenshots!)
             canvas.toBlob(async (blob) => {
                 if (blob && streaming) {
                     try {
                         const response = await fetch('/upload', {
                             method: 'POST',
                             body: blob,
-                            headers: { 'Content-Type': 'image/jpeg' }
+                            headers: { 'Content-Type': 'image/png' }
                         });
                         
                         if (response.ok) {
@@ -454,7 +382,7 @@ void setupWebServer() {
                 if (streaming) {
                     setTimeout(sendFrames, 66);
                 }
-            }, 'image/jpeg', 0.7);
+            }, 'image/png');
         }
     </script>
 </body>
@@ -488,7 +416,7 @@ void setupWebServer() {
             Serial.printf("WS Data: final=%d, index=%u, len=%u, total=%u, opcode=%d\n",
                          info->final, info->index, len, info->len, info->opcode);
             
-            // Only handle binary frames (JPEG images)
+            // Only handle binary frames (PNG images)
             if (info->opcode == WS_BINARY || info->opcode == WS_CONTINUATION) {
                 
                 // First chunk of new frame
@@ -691,11 +619,11 @@ void loop()
                 size_t bufSize = frameSize;
                 bool isMono = isMonochrome;
                 
-                // Draw JPEG to display (color or monochrome)
+                // Draw PNG to display (color or monochrome)
                 if (isMono) {
-                    drawMonoJPEG(bufPtr, bufSize);
+                    drawMonoPNG(bufPtr, bufSize);
                 } else {
-                    drawJPEG(bufPtr, bufSize);
+                    drawPNG(bufPtr, bufSize);
                 }
                 
                 // Track performance
