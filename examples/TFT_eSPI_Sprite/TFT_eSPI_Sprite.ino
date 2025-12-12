@@ -22,9 +22,9 @@
 #include <JPEGDecoder.h>
 
 // WiFi credentials
-const char* ssid = "ACNPhone";
-const char* password = "testtest";
-const char* mdnsName = "esp";
+const char ssid[100] = "|* *|";
+const char password[100] = "|*P*|";
+const char mdnsName[100] = "|*M*|";
 
 // Web server on port 80
 AsyncWebServer server(80);
