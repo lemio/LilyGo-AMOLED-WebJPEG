@@ -222,6 +222,10 @@
         // WebSocket connection
         let ws = null;
         let wsConnected = false;
+        let reconnectAttempts = 0;
+        let maxReconnectAttempts = 10;
+        let reconnectDelay = 2000; // Start with 2 seconds
+        let reconnectTimer = null;
 
         // Update quality value display
         qualitySlider.addEventListener('input', (e) => {
@@ -280,9 +284,8 @@
             }
         }
 
-        async function startStreaming() {
-            try {
-                // Connect WebSocket first
+        function connectWebSocket() {
+            return new Promise((resolve, reject) => {
                 const espAddress = espAddressInput.value.trim();
                 const isMono = monoModeCheckbox.checked;
                 const wsEndpoint = isMono ? '/ws-mono' : '/ws';
@@ -293,83 +296,125 @@
                 ws = new WebSocket(wsUrl);
                 ws.binaryType = 'arraybuffer';
                 
-                ws.onopen = async () => {
+                ws.onopen = () => {
                     wsConnected = true;
+                    reconnectAttempts = 0; // Reset reconnect counter on successful connection
+                    reconnectDelay = 2000; // Reset delay
                     console.log('WebSocket connected!');
-                    
-                    try {
-                        const sourceType = sourceTypeSelect.value;
-                        let stream;
-                        
-                        if (sourceType === 'screen') {
-                            // Request screen capture
-                            updateStatus('🖥️ Requesting screen share...', 'info');
-                            stream = await navigator.mediaDevices.getDisplayMedia({ 
-                                video: { 
-                                    width: { ideal: 1920 },
-                                    height: { ideal: 1080 },
-                                    frameRate: { ideal: 30 }
-                                },
-                                audio: false
-                            });
-                        } else {
-                            // Request camera access
-                            updateStatus('🎥 Requesting camera access...', 'info');
-                            stream = await navigator.mediaDevices.getUserMedia({ 
-                                video: { 
-                                    width: { ideal: 640 },
-                                    height: { ideal: 480 },
-                                    facingMode: 'user'
-                                } 
-                            });
-                        }
-                        
-                        video.srcObject = stream;
-                        streaming = true;
-                        startBtn.disabled = true;
-                        stopBtn.disabled = false;
-                        frameCount = 0;
-                        errorCount = 0;
-                        totalDataSize = 0;
-                        fpsHistory = [];
-                        frameSizeHistory = [];
-                        
-                        updateStatus('✅ Streaming active', 'success');
-                        
-                        // Wait for video to be ready
-                        video.onloadedmetadata = () => {
-                            sendFrames();
-                        };
-                        
-                        // Handle stream ending (user stops screen share)
-                        stream.getVideoTracks()[0].addEventListener('ended', () => {
-                            console.log('Stream ended by user');
-                            stopStreaming();
-                        });
-                    } catch (err) {
-                        console.error('Camera/screen error:', err);
-                        updateStatus('❌ Camera/screen access failed', 'error');
-                        if (ws) ws.close();
-                    }
+                    resolve();
                 };
                 
                 ws.onerror = (error) => {
                     console.error('WebSocket error:', error);
-                    updateStatus('❌ WebSocket connection failed', 'error');
                     wsConnected = false;
+                    reject(error);
                 };
                 
                 ws.onclose = () => {
                     console.log('WebSocket closed');
+                    const wasConnected = wsConnected;
                     wsConnected = false;
-                    if (streaming) {
-                        updateStatus('⚠️ Connection lost', 'warning');
+                    
+                    if (streaming && wasConnected) {
+                        // Connection was lost while streaming - attempt to reconnect
+                        updateStatus('⚠️ Connection lost - attempting to reconnect...', 'warning');
+                        attemptReconnect();
                     }
                 };
+            });
+        }
+
+        function attemptReconnect() {
+            if (!streaming) {
+                // User stopped streaming, don't reconnect
+                return;
+            }
+            
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                updateStatus('❌ Max reconnection attempts reached', 'error');
+                stopStreaming();
+                return;
+            }
+            
+            reconnectAttempts++;
+            updateStatus(`🔄 Reconnecting (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`, 'warning');
+            
+            // Clear any existing timer
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+            }
+            
+            // Exponential backoff: double the delay each time, max 30 seconds
+            const currentDelay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), 30000);
+            
+            reconnectTimer = setTimeout(async () => {
+                try {
+                    await connectWebSocket();
+                    updateStatus('✅ Reconnected successfully!', 'success');
+                } catch (err) {
+                    console.error('Reconnection failed:', err);
+                    // Will trigger onclose which will call attemptReconnect again
+                }
+            }, currentDelay);
+        }
+
+        async function startStreaming() {
+            try {
+                // Connect WebSocket first
+                await connectWebSocket();
+                
+                // Now request media stream
+                const sourceType = sourceTypeSelect.value;
+                let stream;
+                
+                if (sourceType === 'screen') {
+                    // Request screen capture
+                    updateStatus('🖥️ Requesting screen share...', 'info');
+                    stream = await navigator.mediaDevices.getDisplayMedia({ 
+                        video: { 
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 },
+                            frameRate: { ideal: 30 }
+                        },
+                        audio: false
+                    });
+                } else {
+                    // Request camera access
+                    updateStatus('🎥 Requesting camera access...', 'info');
+                    stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { 
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        } 
+                    });
+                }
+                
+                video.srcObject = stream;
+                streaming = true;
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                frameCount = 0;
+                errorCount = 0;
+                totalDataSize = 0;
+                fpsHistory = [];
+                frameSizeHistory = [];
+                
+                updateStatus('✅ Streaming active', 'success');
+                
+                // Wait for video to be ready
+                video.onloadedmetadata = () => {
+                    sendFrames();
+                };
+                
+                // Handle stream ending (user stops screen share)
+                stream.getVideoTracks()[0].addEventListener('ended', () => {
+                    console.log('Stream ended by user');
+                    stopStreaming();
+                });
                 
             } catch (err) {
-                updateStatus('❌ Error: ' + err.message, 'error');
-                console.error('Stream error:', err);
+                console.error('Error starting stream:', err);
                 
                 if (err.name === 'NotAllowedError') {
                     updateStatus('❌ Permission denied', 'error');
@@ -377,21 +422,42 @@
                     updateStatus('❌ Source not found', 'error');
                 } else if (err.name === 'NotSupportedError') {
                     updateStatus('❌ Screen capture not supported', 'error');
+                } else {
+                    updateStatus('❌ Error: ' + err.message, 'error');
                 }
+                
+                // Clean up on error
+                if (ws && wsConnected) {
+                    ws.close();
+                    ws = null;
+                }
+                streaming = false;
             }
         }
 
         function stopStreaming() {
             streaming = false;
+            
+            // Clear reconnection timer
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            reconnectAttempts = 0;
+            
+            // Stop media stream
             if (video.srcObject) {
                 video.srcObject.getTracks().forEach(track => track.stop());
                 video.srcObject = null;
             }
+            
+            // Close WebSocket
             if (ws && wsConnected) {
                 ws.close();
                 ws = null;
                 wsConnected = false;
             }
+            
             startBtn.disabled = false;
             stopBtn.disabled = true;
             updateStatus('⏹️ Streaming stopped', 'info');
