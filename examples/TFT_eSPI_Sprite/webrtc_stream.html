@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Video Stream Client</title>
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+    <script src="UPNG.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -457,42 +459,58 @@
 
                 // Get image format and quality settings
                 const imageFormat = imageFormatSelect.value;
-                const mimeType = imageFormat === 'png' ? 'image/png' : 'image/jpeg';
                 const quality = imageFormat === 'jpeg' ? parseFloat(qualitySlider.value) : undefined;
                 
                 console.log(`Sending frame: ${canvas.width}x${canvas.height}, format: ${imageFormat}, quality: ${quality || 'N/A'}`);
                 
-                canvas.toBlob(async (blob) => {
-                    if (blob && streaming && wsConnected) {
-                        try {
-                            // Send via WebSocket - MUCH faster than HTTP POST!
-                            const arrayBuffer = await blob.arrayBuffer();
-                            
-                            if (ws.readyState === WebSocket.OPEN) {
-                                ws.send(arrayBuffer);
-                                
-                                console.log(`Sent ${arrayBuffer.byteLength} bytes via WebSocket`);
-                                
-                                frameCount++;
-                                totalDataSize += arrayBuffer.byteLength;
-                                updateStats(arrayBuffer.byteLength);
-                            }
-                            
-                        } catch (err) {
-                            errorCount++;
-                            updateStats();
-                            console.error('WebSocket send error:', err);
-                            updateStatus('⚠️ Connection issue', 'warning');
-                        }
-                    }
+                // Encode image
+                let arrayBuffer;
+                
+                if (imageFormat === 'png') {
+                    // Use UPNG.js for 4-bit PNG without alpha channel
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
                     
-                    // Schedule next frame based on desired frame rate
-                    if (streaming) {
-                        const fps = parseInt(frameRateInput.value) || 6;
-                        const delay = 1000 / fps;
-                        setTimeout(sendFrames, delay);
+            
+                    // Encode with UPNG.js: 4-bit color depth, no compression (0 = best speed)
+                    const pngBuffer = UPNG.encodeLL([imageData.buffer] , canvas.width, canvas.height, 3,0,8);
+                    arrayBuffer = pngBuffer;
+                    console.log(arrayBuffer)
+                    console.log(`UPNG 4-bit (no alpha): ${arrayBuffer.byteLength} bytes`);
+                } else {
+                    // Use canvas.toBlob for JPEG
+                    const blob = await new Promise(resolve => {
+                        canvas.toBlob(resolve, 'image/jpeg', quality);
+                    });
+                    arrayBuffer = await blob.arrayBuffer();
+                }
+                
+                // Send via WebSocket
+                if (streaming && wsConnected) {
+                    try {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(arrayBuffer);
+                            
+                            console.log(`Sent ${arrayBuffer.byteLength} bytes via WebSocket`);
+                            
+                            frameCount++;
+                            totalDataSize += arrayBuffer.byteLength;
+                            updateStats(arrayBuffer.byteLength);
+                        }
+                        
+                    } catch (err) {
+                        errorCount++;
+                        updateStats();
+                        console.error('WebSocket send error:', err);
+                        updateStatus('⚠️ Connection issue', 'warning');
                     }
-                }, mimeType, quality);
+                }
+                
+                // Schedule next frame based on desired frame rate
+                if (streaming) {
+                    const fps = parseInt(frameRateInput.value) || 6;
+                    const delay = 1000 / fps;
+                    setTimeout(sendFrames, delay);
+                }
             } else {
                 // Video not ready, try again
                 if (streaming) {
