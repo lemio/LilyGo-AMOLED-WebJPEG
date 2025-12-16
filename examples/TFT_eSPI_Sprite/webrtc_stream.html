@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Video Stream Client</title>
     <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
-    <script src="UPNG.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/upng-js@2.1.0/UPNG.min.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -468,13 +468,20 @@
                 
                 if (imageFormat === 'png') {
                     // Use UPNG.js for 4-bit PNG without alpha channel
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                     
-            
+                    // Convert RGBA to RGB (remove alpha channel)
+                    const rgbData = new Uint8Array(canvas.width * canvas.height * 3);
+                    for (let i = 0, j = 0; i < imageData.data.length; i += 4, j += 3) {
+                        rgbData[j] = imageData.data[i];       // R
+                        rgbData[j + 1] = imageData.data[i + 1]; // G
+                        rgbData[j + 2] = imageData.data[i + 2]; // B
+                    }
+                    console.log(imageData)
                     // Encode with UPNG.js: 4-bit color depth, no compression (0 = best speed)
-                    const pngBuffer = UPNG.encodeLL([imageData.buffer] , canvas.width, canvas.height, 3,0,8);
+                    const pngBuffer = UPNG.encode([imageData.data.buffer], canvas.width, canvas.height, 255);
                     arrayBuffer = pngBuffer;
-                    console.log(arrayBuffer)
+                    
                     console.log(`UPNG 4-bit (no alpha): ${arrayBuffer.byteLength} bytes`);
                 } else {
                     // Use canvas.toBlob for JPEG
