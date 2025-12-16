@@ -391,7 +391,6 @@
                 };
                 
             } catch (err) {
-                updateStatus('❌ Error: ' + err.message, 'error');
                 console.error('Stream error:', err);
                 
                 if (err.name === 'NotAllowedError') {
@@ -400,6 +399,10 @@
                     updateStatus('❌ Source not found', 'error');
                 } else if (err.name === 'NotSupportedError') {
                     updateStatus('❌ Screen capture not supported', 'error');
+                } else if (err.message && err.message.includes('insecure WebSocket connection')) {
+                    updateStatus('❌ HTTPS/WSS Error: Click the 🔒 or ⓘ icon left of the URL, go to "Site settings", and enable "Insecure content" to connect to non-SSL ESP32', 'error');
+                } else {
+                    updateStatus('❌ Error: ' + err.message, 'error');
                 }
             }
         }
