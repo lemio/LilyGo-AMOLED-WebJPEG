@@ -137,7 +137,7 @@
                 <label>Source:</label>
                 <select id="sourceType" style="width: 200px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
                     <option value="camera">📹 Webcam</option>
-                    <option value="screen">🖥️ Screen Share</option>
+                    <option value="screen" selected>🖥️ Screen Share</option>
                 </select>
             </div>
             <div>
@@ -183,8 +183,8 @@
             <ul style="text-align: left; display: inline-block;">
                 <li>Make sure your ESP32 is connected to WiFi</li>
                 <li>ESP32 should be accessible at <code>esp-webjpeg.local</code> unless you set a different mDNS hostname when flashing</li>
-                <li>Select the correct display size for your AMOLED screen</li>
-                <li>Video is automatically scaled to match display dimensions</li>
+                <li>Display size auto-detects from the board - override the dropdown manually if it's wrong or unreachable</li>
+                <li>Video is automatically cropped and scaled to fill the display without distortion</li>
                 <li>Choose between webcam or screen capture</li>
                 <li>Screen share works in Chrome, Edge, and Firefox</li>
                 <li>Lower frame rate or quality if stream is laggy</li>
@@ -252,6 +252,29 @@
                 const [width, height] = sizeValue.split('x').map(Number);
                 return { width, height };
             }
+        }
+
+        // Draws the video frame into the canvas using "object-fit: cover" - crops the
+        // source to the canvas's aspect ratio (centered), then scales that crop to fill
+        // the canvas exactly. Avoids the stretch-distortion a naive full-frame draw
+        // would cause whenever the capture's aspect ratio doesn't match the display's.
+        function drawVideoCover(video, canvas, ctx) {
+            const vw = video.videoWidth, vh = video.videoHeight;
+            const targetAspect = canvas.width / canvas.height;
+            const sourceAspect = vw / vh;
+            let sx, sy, sWidth, sHeight;
+            if (sourceAspect > targetAspect) {
+                sHeight = vh;
+                sWidth = vh * targetAspect;
+                sx = (vw - sWidth) / 2;
+                sy = 0;
+            } else {
+                sWidth = vw;
+                sHeight = vw / targetAspect;
+                sx = 0;
+                sy = (vh - sHeight) / 2;
+            }
+            ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height);
         }
 
         function updateStatus(message, type) {
@@ -360,21 +383,30 @@
 
         async function startStreaming() {
             try {
+                // Re-check board size in case espAddress was typed/changed by hand
+                // since page load (the load-time detection covers the common case).
+                await detectBoardConfig();
+
                 // Connect WebSocket first
                 await connectWebSocket();
-                
+
                 // Now request media stream
                 const sourceType = sourceTypeSelect.value;
                 let stream;
                 
                 if (sourceType === 'screen') {
-                    // Request screen capture
+                    // Request screen capture. `ideal` is only a hint the OS/browser is
+                    // free to ignore (common for "Entire Screen"/"Window" sources), but
+                    // asking for close to the actual target avoids over-capturing when
+                    // it IS honored (e.g. Chrome's tab-capture surface) - the cover-fit
+                    // draw below makes the output correct either way.
                     updateStatus('🖥️ Requesting screen share...', 'info');
-                    stream = await navigator.mediaDevices.getDisplayMedia({ 
-                        video: { 
-                            width: { ideal: 1920 },
-                            height: { ideal: 1080 },
-                            frameRate: { ideal: 30 }
+                    const displayDims = getDisplayDimensions();
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: {
+                            width: { ideal: displayDims.width },
+                            height: { ideal: displayDims.height },
+                            frameRate: { ideal: parseInt(frameRateInput.value) || 30 }
                         },
                         audio: false
                     });
@@ -475,8 +507,8 @@
                 canvas.width = displayDims.width;
                 canvas.height = displayDims.height;
 
-                // Draw current video frame to canvas (scaled to display size)
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                // Draw current video frame to canvas, cropped/scaled to fill it exactly
+                drawVideoCover(video, canvas, ctx);
                 
                 // Convert to grayscale if monochrome mode
                 if (isMono) {
@@ -626,9 +658,43 @@
             }
         }
 
+        // Fetches the board's actual resolution from /boardinfo and selects the
+        // matching Display Size option (or falls back to Custom with those exact
+        // dimensions) - keeps the target size correct without the user having to know
+        // or pick it. Cross-origin since this page is served from GitHub Pages, not the
+        // board itself; the board sends Access-Control-Allow-Origin: * to allow it.
+        // Silently leaves the current selection alone on any failure (unreachable
+        // board, no espAddress yet, etc).
+        async function detectBoardConfig() {
+            const espAddress = espAddressInput.value.trim();
+            if (!espAddress) return false;
+            try {
+                const response = await fetch(espAddress + '/boardinfo');
+                if (!response.ok) return false;
+                const boardInfo = await response.json();
+                const detectedSize = `${boardInfo.width}x${boardInfo.height}`;
+                const options = Array.from(displaySizeSelect.options).map(opt => opt.value);
+                if (options.includes(detectedSize)) {
+                    displaySizeSelect.value = detectedSize;
+                    customSizeDiv.style.display = 'none';
+                } else {
+                    displaySizeSelect.value = 'custom';
+                    customWidthInput.value = boardInfo.width;
+                    customHeightInput.value = boardInfo.height;
+                    customSizeDiv.style.display = 'block';
+                }
+                console.log('Detected board:', boardInfo);
+                return true;
+            } catch (err) {
+                console.log('Board auto-detection failed:', err);
+                return false;
+            }
+        }
+
         // Auto-detect ESP32 if on local network
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
             loadQueryParameters();
+            await detectBoardConfig();
             console.log('Ready to stream to ESP32');
         });
     </script>
