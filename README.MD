@@ -1,10 +1,42 @@
-<h1 align = "center">🌟LilyGO AMOLED Series🌟</h1>
+<h1 align = "center">LilyGo-AMOLED-WebJPEG</h1>
+<p align="center"><i>Use a LilyGo AMOLED display as an external monitor for prototyping</i></p>
 
 [![PlatformIO CI](https://github.com/lemio/LilyGo-AMOLED-WebJPEG/actions/workflows/platformio.yml/badge.svg)](https://github.com/lemio/LilyGo-AMOLED-WebJPEG/actions/workflows/platformio.yml)
 [![arduino-library-badge](https://www.ardu-badge.com/badge/LilyGo-AMOLED-Series.svg?)](https://www.ardu-badge.com/LilyGo-AMOLED-Series)
 [![PlatformIO Registry](https://badges.registry.platformio.org/packages/xinyuan-lilygo/library/LilyGo-AMOLED-Series.svg)](https://registry.platformio.org/libraries/xinyuan-lilygo/LilyGo-AMOLED-Series)
 
 <!-- **English | [中文](README_CN.MD)** -->
+
+## What this is
+
+Designing content for a small display is fiddly: draw a frame, convert it to a C array
+with something like image2cpp, reflash, look at it on the real hardware, repeat. This
+project skips that loop entirely - point your browser at anything (a browser tab, a
+Figma mirror, a p5 sketch, a screen recording, your webcam) and it shows up on the
+physical AMOLED display over WiFi, live, in full colour. Change the design, the page
+just re-renders - no reflashing.
+
+Under the hood it's simple:
+[webrtc_stream.html](./examples/webJPEG/webrtc_stream.html) grabs a video stream with
+the browser's screen-share/camera APIs, draws each frame to a `<canvas>`, encodes it as
+a JPEG, and sends it over a `WebSocket`. The ESP32 decodes each JPEG and pushes it
+straight to the display. (Visiting the board's own address redirects you to that page
+hosted over HTTPS - screen/camera capture needs a secure context that plain `http://` on
+a LAN address can't offer.) See [examples/webJPEG/README.md](./examples/webJPEG/README.md)
+for the full technical rundown, board support, and how to flash it (including a
+browser-based flasher - no PlatformIO install required just to try it).
+
+This is the same idea as an
+[earlier project of mine](https://www.hackster.io/lemio/using-oled-display-as-external-monitor-afda57)
+that pushed pixels from a Processing sketch to a monochrome OLED over serial, one bit
+per pixel - just rebuilt around WiFi
+and the browser's own screen-capture APIs instead of a serial link and a script watching
+your cursor, and full colour instead of 1-bit. Same motivation, though: getting from
+"idea" to "something on real hardware, in your hands" as fast as possible, using
+whatever design tool you already reach for - before deciding whether that hardware
+should even be a screen at all. (Dynamic screens are a real accessibility burden - a
+well-placed LED or a physical switch is sometimes the better answer. Prototyping fast is
+what buys you the time to actually weigh that.)
 
 ## News
 

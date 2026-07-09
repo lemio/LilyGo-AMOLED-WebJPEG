@@ -39,6 +39,14 @@ jobs:
         with:
           output-dir: docs
 
+      # The device's own / route redirects here (see webJPEG.ino's setupWebServer())
+      # instead of serving the streaming page itself: getDisplayMedia()/getUserMedia()
+      # require a secure context, which plain http:// on a LAN address/mDNS name isn't.
+      # Doesn't collide with the Action's own docs/ output (index.html, wizard.html,
+      # config.js, manifest.json, firmware/) - see its WEBAPP_ASSETS list.
+      - name: Publish webrtc_stream.html alongside the flasher site
+        run: cp examples/webJPEG/webrtc_stream.html docs/webrtc_stream.html
+
       - name: Commit and push docs/
         run: |
           git config user.name "github-actions[bot]"

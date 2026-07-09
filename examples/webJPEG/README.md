@@ -65,22 +65,42 @@ issue with your board model and a serial log from boot.
    IP address, and the display itself shows it plus the mDNS hostname once WiFi
    connects.
 2. Visit `http://<that address>` (or `http://esp-webjpeg.local`, unless you set a
-   different mDNS hostname) in Chrome, Edge, or Firefox. This is served directly by the
-   board, so there's no separate file to open - though
-   [webrtc_stream.html](./webrtc_stream.html) is the same page, kept in the repo so it
-   can also be opened as a local file (e.g. to point it at a board whose mDNS name
-   doesn't resolve on your network).
-3. Click "🔍 Detect Board" to auto-fill the correct display size, or set it manually -
-   the dropdown lists the resolutions above.
-4. Pick a source (webcam or screen share), then "▶️ Start Streaming" and grant the
-   permission prompt.
+   different mDNS hostname) in Chrome, Edge, or Firefox. The board doesn't serve the
+   streaming page itself - it 302-redirects you to the HTTPS copy of
+   [webrtc_stream.html](./webrtc_stream.html) hosted on GitHub Pages, pre-filling the
+   `espAddress` field with the board's address. See "Why the redirect" below for why,
+   and the one manual step it requires.
+3. Set the display size to match your board (see the resolutions above), pick a source
+   (webcam or screen share), then "▶️ Start Streaming" and grant the permission prompt.
+
+### Why the redirect
+
+`getDisplayMedia()`/`getUserMedia()` (screen share / camera capture) only work in a
+"secure context" - HTTPS, or literal `localhost`/`127.0.0.1`. A LAN address or `.local`
+mDNS name served over plain `http://`, which is all this board can do, doesn't qualify -
+so serving the streaming page directly from the board would load fine but silently have
+no working "Start Streaming" button. Redirecting to the same page hosted over HTTPS on
+GitHub Pages fixes that. Two consequences of this, worth knowing:
+
+- **You need internet access** to reach GitHub Pages, even though the actual video
+  stream stays entirely on your LAN afterwards. If you don't have internet access, open
+  [webrtc_stream.html](./webrtc_stream.html) as a local file instead (`file://` also
+  counts as a secure context, and it doesn't need to reach GitHub Pages at all) and fill
+  in `espAddress` yourself.
+- **The WebSocket connection back to the board is `ws://`, not `wss://`** (the board
+  can't easily serve TLS). Browsers block that as "mixed content" by default when the
+  page itself is HTTPS, so the stream will fail to start the first time. In Chrome/Edge:
+  click the padlock/tune icon left of the address bar → **Site settings** → **Insecure
+  content** → **Allow**, then reload. This is a one-time exception per browser, tied to
+  the `lemio.github.io` origin - it doesn't weaken anything else, since the "insecure"
+  traffic is only ever going to your own board on your own LAN.
 
 ### URL query parameters
 
-`webrtc_stream.html`/the device's own `/` page accept the same query parameters, useful
-for bookmarking a specific setup:
+`webrtc_stream.html` accepts these query parameters, useful for bookmarking a specific
+setup (the board's own `/` redirect only ever sets `espAddress`):
 
-- `espAddress` - ESP32 URL (defaults to the page's own address when served by the board)
+- `espAddress` - ESP32 URL (set automatically by the board's redirect)
 - `displaySize` - `WxH` or one of the predefined sizes
 - `customWidth`, `customHeight` - used when `displaySize=custom`
 - `sourceType` - `camera` or `screen`
@@ -92,11 +112,12 @@ Example: `webrtc_stream.html?espAddress=http://192.168.1.88&displaySize=600x450&
 
 ## Troubleshooting
 
-- **Board not detected / `/boardinfo` fails:** confirm the ESP32 connected to WiFi (check
-  the Serial Monitor), then try the board's raw IP address instead of the mDNS hostname.
+- **"Start Streaming" does nothing / permission prompt never appears:** you're probably
+  on the board's own `http://` page rather than the HTTPS redirect target - check the
+  address bar says `https://lemio.github.io/...`. If it already does, see "Why the
+  redirect" above for the one-time insecure-content exception the WebSocket needs.
 - **Image looks wrong (bands, wrong colors, partial screen):** the display size selected
-  in the browser must match the physical board. Click "🔍 Detect Board" rather than
-  picking a size by hand.
+  in the browser must match your physical board - set it from the table above.
 - **Choppy / laggy stream:** lower the frame rate or JPEG quality slider.
 
 ## Technical notes

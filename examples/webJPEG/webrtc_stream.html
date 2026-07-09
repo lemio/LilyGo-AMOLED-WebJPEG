@@ -117,13 +117,12 @@
             <div>
                 <label>ESP32 Address:</label>
                 <input type="text" id="espAddress" value="http://esp-webjpeg.local" placeholder="http://esp-webjpeg.local">
-                <button onclick="detectBoardConfig()" style="padding: 8px 15px; font-size: 14px; margin-left: 10px;">🔍 Detect Board</button>
             </div>
             <div>
                 <label>Display Size:</label>
                 <select id="displaySize" style="width: 200px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
                     <option value="536x240" selected>536x240 (1.91" AMOLED)</option>
-                    <option value="600x450">600x450 (2.41" AMOLED)</option>
+                    <option value="450x600">450x600 (2.41" AMOLED)</option>
                     <option value="194x368">194x368 (1.47" AMOLED)</option>
                     <option value="custom">Custom...</option>
                 </select>
@@ -543,21 +542,17 @@
         // Parse URL query parameters and populate form fields
         function loadQueryParameters() {
             const urlParams = new URLSearchParams(window.location.search);
-
-            // ESP32 Address: if this page was loaded directly from the ESP32 (not
-            // opened as a local file), default to that same origin - always correct
-            // regardless of which mDNS hostname was configured at flash time.
+            
+            // ESP32 Address
             if (urlParams.has('espAddress')) {
                 espAddressInput.value = urlParams.get('espAddress');
-            } else if (window.location.origin.startsWith('http')) {
-                espAddressInput.value = window.location.origin;
             }
-
+            
             // Display Size
             if (urlParams.has('displaySize')) {
                 const size = urlParams.get('displaySize');
                 // Check if it's a predefined size or custom
-                const validSizes = ['536x240', '600x450', '194x368'];
+                const validSizes = ['536x240', '450x600', '194x368'];
                 if (validSizes.includes(size)) {
                     displaySizeSelect.value = size;
                 } else if (size === 'custom' || size.includes('x')) {
@@ -631,48 +626,9 @@
             }
         }
 
-        // Auto-detect board configuration from ESP32
-        async function detectBoardConfig() {
-            try {
-                const espAddress = espAddressInput.value.trim();
-                const response = await fetch(espAddress + '/boardinfo');
-                if (response.ok) {
-                    const boardInfo = await response.json();
-                    console.log('Detected board:', boardInfo);
-                    
-                    // Auto-set display size based on detected board
-                    const detectedSize = `${boardInfo.width}x${boardInfo.height}`;
-                    
-                    // Check if it's a predefined size
-                    const options = Array.from(displaySizeSelect.options).map(opt => opt.value);
-                    if (options.includes(detectedSize)) {
-                        displaySizeSelect.value = detectedSize;
-                        customSizeDiv.style.display = 'none';
-                    } else {
-                        // Use custom size
-                        displaySizeSelect.value = 'custom';
-                        customWidthInput.value = boardInfo.width;
-                        customHeightInput.value = boardInfo.height;
-                        customSizeDiv.style.display = 'block';
-                    }
-                    
-                    updateStatus(`✅ Detected: ${boardInfo.name} (${boardInfo.width}x${boardInfo.height})`, 'success');
-                    return true;
-                }
-            } catch (err) {
-                console.log('Board auto-detection failed:', err);
-                updateStatus('⚠️ Could not auto-detect board. Using manual settings.', 'warning');
-            }
-            return false;
-        }
-
         // Auto-detect ESP32 if on local network
-        window.addEventListener('load', async () => {
+        window.addEventListener('load', () => {
             loadQueryParameters();
-            
-            // Try to auto-detect board configuration
-            await detectBoardConfig();
-            
             console.log('Ready to stream to ESP32');
         });
     </script>
