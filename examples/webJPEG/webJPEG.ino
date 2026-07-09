@@ -439,6 +439,12 @@ void setupWiFi() {
 }
 
 void setupWebServer() {
+    // The streaming page is hosted on GitHub Pages (see the "/" redirect below), so its
+    // fetch("/boardinfo") calls back to this device are cross-origin. Every endpoint
+    // here is read-only board/status info or the streaming WebSocket - nothing
+    // sensitive or mutating - so a wildcard is fine.
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+
     // Serve board info as JSON
     server.on("/boardinfo", HTTP_GET, [](AsyncWebServerRequest *request) {
         String json = "{";

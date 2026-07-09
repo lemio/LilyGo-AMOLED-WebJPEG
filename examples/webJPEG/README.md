@@ -70,8 +70,11 @@ issue with your board model and a serial log from boot.
    [webrtc_stream.html](./webrtc_stream.html) hosted on GitHub Pages, pre-filling the
    `espAddress` field with the board's address. See "Why the redirect" below for why,
    and the one manual step it requires.
-3. Set the display size to match your board (see the resolutions above), pick a source
-   (webcam or screen share), then "▶️ Start Streaming" and grant the permission prompt.
+3. The Display Size dropdown auto-detects your board's resolution (via `/boardinfo`) -
+   override it manually if detection fails or you're pointing at a different board.
+   Pick a source (webcam or screen share), then "▶️ Start Streaming" and grant the
+   permission prompt. Whatever you capture is automatically cropped and scaled to fill
+   the display exactly, with no manual pre-resizing (e.g. via devtools) needed.
 
 ### Why the redirect
 
@@ -94,6 +97,11 @@ GitHub Pages fixes that. Two consequences of this, worth knowing:
   content** → **Allow**, then reload. This is a one-time exception per browser, tied to
   the `lemio.github.io` origin - it doesn't weaken anything else, since the "insecure"
   traffic is only ever going to your own board on your own LAN.
+- **`fetch()` calls back to the board (like `/boardinfo`, used for auto-detecting
+  display size) are cross-origin too**, since the page's origin is now `github.io`, not
+  the board. `webJPEG.ino` sends `Access-Control-Allow-Origin: *` on every response to
+  allow this - safe here since every endpoint is read-only board/status info or the
+  streaming WebSocket, nothing sensitive.
 
 ### URL query parameters
 
@@ -117,7 +125,8 @@ Example: `webrtc_stream.html?espAddress=http://192.168.1.88&displaySize=600x450&
   address bar says `https://lemio.github.io/...`. If it already does, see "Why the
   redirect" above for the one-time insecure-content exception the WebSocket needs.
 - **Image looks wrong (bands, wrong colors, partial screen):** the display size selected
-  in the browser must match your physical board - set it from the table above.
+  in the browser must match your physical board. Auto-detection should get this right;
+  if it didn't (e.g. `/boardinfo` unreachable), set it manually from the table above.
 - **Choppy / laggy stream:** lower the frame rate or JPEG quality slider.
 
 ## Technical notes
