@@ -1,0 +1,45 @@
+# Per-example metadata for the ESP32-S3-Flasher repo's reusable build/publish Action
+# (https://github.com/lemio/ESP32-S3-Flasher). The Action runs a bare `pio run`, which
+# builds platformio.ini's only env (T-Display-AMOLED, also its `default_envs`), then
+# merges this file's name/description/variables into the generated manifest.json
+# alongside that compiled binary. This repo now contains a single project
+# (examples/webJPEG), so this is the only entry under `examples:` below.
+#
+# `variables[].firmware_name` must match the exact string webJPEG.ino reserves as a
+# fixed-size array (e.g. `const char ssid[100] = "|*S*|";`) - it's the literal text the
+# flasher searches for in the compiled binary. ssid/password have no sensible default
+# (must be patched here, or before compiling); mdnsName's default value is itself both a
+# working hostname AND the flasher's search key, so a board flashed without ever
+# touching the browser flasher still gets a usable http://esp-webjpeg.local.
+# See examples/webJPEG/webJPEG.ino.
+#
+# `site:` (optional, alongside `examples:`) renames the flasher tool itself instead of
+# leaving it as the generic "ESP32-S3 Web Flasher"/"ESP32-S3 Flash Wizard" - see
+# ESP32-S3-Flasher's README.md, "Site-wide branding" section, for the full field list.
+
+site:
+  title: LilyGo AMOLED WebJPEG Flasher
+  subtitle: Flash the browser-to-display WebJPEG streamer straight from your browser - no PlatformIO needed
+
+examples:
+  T-Display-AMOLED:
+    name: WebJPEG Stream Display
+    description: >-
+      Streams a browser tab, camera, or screen share to the AMOLED display over WiFi as
+      MJPEG frames. Auto-detects the attached panel at boot, so this one firmware works
+      on the 1.47" Lite, 1.91", and 2.41"/T4-S3 T-Display AMOLED boards.
+    sourceUrl: https://github.com/lemio/LilyGo-AMOLED-WebJPEG/tree/main/examples/webJPEG
+    variables:
+      - firmware_name: "|*S*|"
+        readable_name: WiFi Name (SSID)
+        default_value: ""
+        max_length: 100
+      - firmware_name: "|*P*|"
+        readable_name: WiFi Password
+        default_value: ""
+        max_length: 100
+      - firmware_name: esp-webjpeg
+        readable_name: mDNS Hostname
+        default_value: esp-webjpeg
+        postfix: .local
+        max_length: 100

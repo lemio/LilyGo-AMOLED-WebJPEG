@@ -1,8 +1,8 @@
 {
-  "name": "LilyGo-AMOLED-Series",
+  "name": "LilyGo-AMOLED-WebJPEG",
   "version": "1.2.0",
-  "description": "LilyGo AMOLED Arduino library",
-  "keywords": "lilygo,amoled",
+  "description": "Streams a browser tab, window, or camera to a LilyGo T-Display AMOLED board over WiFi (WebSocket + MJPEG). Fork of LilyGo-AMOLED-Series trimmed to this one example.",
+  "keywords": "lilygo,amoled,webjpeg,streaming,mjpeg,websocket",
   "authors": [
     {
       "name": "Xinyuan-LilyGO",
@@ -12,13 +12,18 @@
       "name": "LewisHe",
       "url": "https://github.com/lewisxhe",
       "maintainer": true
+    },
+    {
+      "name": "lemio",
+      "url": "https://github.com/lemio",
+      "maintainer": true
     }
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series.git"
+    "url": "https://github.com/lemio/LilyGo-AMOLED-WebJPEG.git"
   },
-  "homepage": "https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series",
+  "homepage": "https://github.com/lemio/LilyGo-AMOLED-WebJPEG",
   "export": {
     "include": [
       "LICENSE",
@@ -60,6 +65,36 @@
       "owner": "lewisxhe",
       "name": "SensorLib",
       "version": "0.2.4"
+    },
+    {
+      "owner": "bodmer",
+      "name": "TFT_eSPI",
+      "version": "2.5.31"
+    },
+    {
+      "owner": "bodmer",
+      "name": "JPEGDecoder",
+      "version": "^2.0.0"
+    },
+    {
+      "owner": "sparkfun",
+      "name": "SparkFun MAX3010x Pulse and Proximity Sensor Library",
+      "version": "^1.1.2"
+    },
+    {
+      "owner": "paulstoffregen",
+      "name": "OneWire",
+      "version": "^2.3.8"
+    },
+    {
+      "owner": "esp32async",
+      "name": "ESPAsyncWebServer",
+      "version": "^3.9.2"
+    },
+    {
+      "owner": "esp32async",
+      "name": "AsyncTCP",
+      "version": "^3.4.9"
     }
   ],
   "examples": ["examples/*/*.ino"],

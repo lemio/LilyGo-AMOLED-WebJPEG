@@ -1,6 +1,7 @@
 #######################################
-# Syntax Coloring Map For LilyGo-AMOLED-Series By lewis He
-# github:https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series
+# Syntax Coloring Map For LilyGo-AMOLED-WebJPEG
+# Board driver by Lewis He: https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series
+# This fork: https://github.com/lemio/LilyGo-AMOLED-WebJPEG
 #######################################
 
 #######################################

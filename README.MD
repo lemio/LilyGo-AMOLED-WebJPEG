@@ -1,7 +1,6 @@
 <h1 align = "center">🌟LilyGO AMOLED Series🌟</h1>
 
-[![PlatformIO CI](https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series/actions/workflows/platformio.yml/badge.svg)](https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series/actions/workflows/platformio.yml)
-[![Arduino CI](https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series/actions/workflows/arduino_ci.yml/badge.svg)](https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series/actions/workflows/arduino_ci.yml)
+[![PlatformIO CI](https://github.com/lemio/LilyGo-AMOLED-WebJPEG/actions/workflows/platformio.yml/badge.svg)](https://github.com/lemio/LilyGo-AMOLED-WebJPEG/actions/workflows/platformio.yml)
 [![arduino-library-badge](https://www.ardu-badge.com/badge/LilyGo-AMOLED-Series.svg?)](https://www.ardu-badge.com/LilyGo-AMOLED-Series)
 [![PlatformIO Registry](https://badges.registry.platformio.org/packages/xinyuan-lilygo/library/LilyGo-AMOLED-Series.svg)](https://registry.platformio.org/libraries/xinyuan-lilygo/LilyGo-AMOLED-Series)
 
@@ -43,45 +42,14 @@
 
 ## 2️⃣Examples
 
+This fork trims the upstream [LilyGo-AMOLED-Series](https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series)
+example set down to a single project - see [examples/webJPEG/README.md](./examples/webJPEG/README.md)
+for what it does and how to flash it (including a browser-based flasher, no PlatformIO
+required).
+
 ```txt
 examples/
-├── Factory                             # Factory example
-├── AdjustBrightness                    # Adjust brightness example
-├── DS18x20_Temperature                 # OneWire example
-├── LumenMeter                          # 1.47-inch AMOLED Built-in Ambient Light Sensor Example
-├── LVGL_SD_Images                      # Display pictures saved in SD card
-├── Lvgl_Images                         # Screen color test
-├── PMU_ADC                             # PMU Voltage detection example , only support 1.47-inch AMOLED
-├── PMU_Interrupt                       # PMU interrupt example , only support 1.47-inch AMOLED
-├── PPM_Example_for_T4S3                # Power chip example, only used for T4-S3
-├── PPM_Example_for_191Plus             # Power chip example, only used for AMOLED 1.91 Plus
-├── CameraShield                        # Extern camera shield example, only supports 1.91 inches
-├── SPI_SDCard                          # External SD card example, SPI communication
-├── QWIIC_GPS_Shield                    # Extern GPS Shield example,use Serial communication
-├── QWIIC_HP303BSensor                  # Extern Temperature Pressure Sensor example,use Wire communication
-├── QWIIC_MAX3010X                      # External heart rate module,use Wire communication
-├── TFT_eSPI_Sprite                     # Use TFT_eSPI Sprite example
-├── TFT_eSPI_Sprite_ArcFill             # Use TFT_eSPI Sprite example
-├── TFT_eSPI_Sprite_graphicstest_small  # Use TFT_eSPI Sprite example
-├── TFT_eSPI_Sprite_RLE_Font            # Use TFT_eSPI Sprite example
-├── TFT_eSPI_Sprite_Rotation            # Screen rotation, only available for 1.91, 2.41 inches
-├── LVGL_Rotation                       # Screen rotation, only available for 1.91, 2.41 inches
-├── Touchpad                            # Touchpad example
-├── TouchPaint                          # TouchPaint example
-├── USB_Host_Keyboard_Mouse             # USB host example
-└── lvgl                                # LVGL examples
-    ├── event
-    ├── get_started
-    ├── layouts
-    │   ├── flex
-    │   └── grid
-    ├── scroll
-    ├── style
-    ├── third_party
-    │   ├── ImageDecoder
-    │   └── gif
-    └── widgets
-        └── ...
+└── webJPEG  # Streams a browser tab/camera/screen share to the AMOLED display over WiFi as MJPEG frames
 ```
 
 ## 3️⃣ PlatformIO Quick Start (Recommended)
@@ -91,15 +59,20 @@ examples/
 3. After the installation is complete, you need to restart `VisualStudioCode`
 4. After restarting `VisualStudioCode`, select `File` in the upper left corner of `VisualStudioCode` -> `Open Folder` -> select the `LilyGO AMOLED Series` directory
 5. Wait for the installation of third-party dependent libraries to complete
-6. Click on the `platformio.ini` file, and in the `platformio` column
-7. Uncomment one of the lines `src_dir = xxxx` to make sure only one line works
-8. Click the (✔) symbol in the lower left corner to compile
+6. Click the (✔) symbol in the lower left corner to compile
 9. Connect the board to the computer USB
 10. Click (→) to upload firmware
 11. Click (plug symbol) to monitor serial output
 12. If it cannot be written, or the USB device keeps flashing, please check the **FAQ** below
 
-## 4️⃣ Install from Arduino Library Manager (recommended)
+## 4️⃣ Install from Arduino Library Manager
+
+> ⚠️ **This does not apply to this fork.** This repo (`LilyGo-AMOLED-WebJPEG`) is not
+> published to the Arduino Library Manager - searching for it there will find nothing,
+> and searching for `LilyGO AMOLED Series` installs the original upstream library
+> (all of *its* examples, not the `webJPEG` one this fork adds). If you want the
+> `webJPEG` example specifically, use PlatformIO (section 3️⃣ above) or the manual
+> install below (clone *this* repository, not the Library Manager).
 
 1. Install [Arduino IDE](https://www.arduino.cc/en/software)
 2. Install [Arduino ESP32 V2.0.5 or later or latest](https://docs.espressif.com/projects/arduino-esp32/en/latest/)
@@ -136,10 +109,16 @@ examples/
 
 ## 5️⃣ Arduino IDE Manual installation (not recommended)
 
+This is the path that actually gets you *this fork's* `webJPEG` example in Arduino IDE.
+
 1. Install [Arduino IDE](https://www.arduino.cc/en/software)
 2. Install [Arduino ESP32 V2.0.5 or later or latest](https://docs.espressif.com/projects/arduino-esp32/en/latest/)
-3. Download `LilyGO AMOLED Series` , move to Arduino library folder (e.g. C:\Users\YourName\Documents\Arduino\libraries)
-4. Copy all folders in [libdeps folder](./libdeps/) to Arduino library folder (e.g. C:\Users\YourName\Documents\Arduino\libraries)
+3. Download **this repository** (`LilyGo-AMOLED-WebJPEG`, not the Library Manager
+   listing), move it to your Arduino library folder (e.g.
+   `C:\Users\YourName\Documents\Arduino\libraries`)
+4. Install its dependencies individually via `Sketch` -> `Include Library` -> `Manage
+   Libraries` - see the `depends=` line in [library.properties](./library.properties)
+   for the full list
 5. Open ArduinoIDE ,`Tools` , Make your selection according to the table below
    | Arduino IDE Setting                  | Value                             |
    | ------------------------------------ | --------------------------------- |
@@ -163,7 +142,7 @@ examples/
 
    - The options in bold are required, others are selected according to actual conditions.
 
-6. `File` -> `Examples` -> `LilyGO AMOLED Series` -> `Any Examples`
+6. `File` -> `Examples` -> `LilyGo-AMOLED-WebJPEG` -> `webJPEG`
 7. Select `Port`
 8. Click `upload` , Wait for compilation and writing to complete
 9. If it cannot be written, or the USB device keeps flashing, please check the **FAQ** below
@@ -190,8 +169,7 @@ examples/
    4. Release the BOOT button
    5. Upload sketch
 
-2. If the above is invalid, burn the [binary file](./firmware/README.MD) to check whether the hardware is normal
-3. **1.47 inches AMOLED(T-Display-AMOLED-Lite)** does not support hardware screen rotation function
+2. **1.47 inches AMOLED(T-Display-AMOLED-Lite)** does not support hardware screen rotation function
 4. If you use external power supply instead of USBC, please turn off the CDC option. This is because the board will wait for USB access when it starts.
 
    - For Arduino IDE users, it can be turned off in the options , Please note that turning off USB CDC will turn off Serial redirection to USBC. At this time, you will not see any Serial message output when opening the port from USBC, but output from GPIO43 and GPIO44.
@@ -236,14 +214,14 @@ examples/
 
 - [ESP32S3-R8](https://www.espressif.com.cn/en/support/documents/technical-documents?keys=&field_type_tid%5B%5D=842)
 - [AMOLED Driver datasheet](./datasheet/RM67162%20DataSheet.pdf)
-- [CST816 datasheet](<[./libdeps/SensorLib/](https://github.com/lewisxhe/SensorLib/blob/master/datasheet/%E6%B5%B7%E6%A0%8E%E5%88%9B%E8%A7%A6%E6%91%B8%E8%8A%AF%E7%89%87%E7%A7%BB%E6%A4%8D%E6%89%8B%E5%86%8C-v3.5-20220701(1).pdf)>)
+- [CST816 datasheet](https://github.com/lewisxhe/SensorLib/blob/master/datasheet/%E6%B5%B7%E6%A0%8E%E5%88%9B%E8%A7%A6%E6%91%B8%E8%8A%AF%E7%89%87%E7%A7%BB%E6%A4%8D%E6%89%8B%E5%86%8C-v3.5-20220701(1).pdf)
 
 ##### T4-S3 datasheet
 
 - [ESP32S3-R8](https://www.espressif.com.cn/en/support/documents/technical-documents?keys=&field_type_tid%5B%5D=842)
 - [SY6970](./datasheet/SY6970%20Datasheet.pdf)
 - [AMOLED Driver datasheet](./datasheet/RM690B0%20DataSheet_V0.2.pdf)
-- [CST226 datasheet](<[./libdeps/SensorLib/](https://github.com/lewisxhe/SensorLib/blob/master/datasheet/%E6%B5%B7%E6%A0%8E%E5%88%9B%E8%A7%A6%E6%91%B8%E8%8A%AF%E7%89%87%E7%A7%BB%E6%A4%8D%E6%89%8B%E5%86%8C-v3.5-20220701(1).pdf)>)
+- [CST226 datasheet](https://github.com/lewisxhe/SensorLib/blob/master/datasheet/%E6%B5%B7%E6%A0%8E%E5%88%9B%E8%A7%A6%E6%91%B8%E8%8A%AF%E7%89%87%E7%A7%BB%E6%A4%8D%E6%89%8B%E5%86%8C-v3.5-20220701(1).pdf)
 
 # 8️⃣ Depends on required libraries
 

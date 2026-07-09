@@ -116,13 +116,14 @@
             <h3>⚙️ Configuration</h3>
             <div>
                 <label>ESP32 Address:</label>
-                <input type="text" id="espAddress" value="http://esp.local" placeholder="http://esp.local">
+                <input type="text" id="espAddress" value="http://esp-webjpeg.local" placeholder="http://esp-webjpeg.local">
+                <button onclick="detectBoardConfig()" style="padding: 8px 15px; font-size: 14px; margin-left: 10px;">🔍 Detect Board</button>
             </div>
             <div>
                 <label>Display Size:</label>
                 <select id="displaySize" style="width: 200px; padding: 8px; border-radius: 5px; border: 1px solid #555; background: #222; color: white;">
                     <option value="536x240" selected>536x240 (1.91" AMOLED)</option>
-                    <option value="450x600">450x600 (2.41" AMOLED)</option>
+                    <option value="600x450">600x450 (2.41" AMOLED)</option>
                     <option value="194x368">194x368 (1.47" AMOLED)</option>
                     <option value="custom">Custom...</option>
                 </select>
@@ -182,7 +183,7 @@
             <p>💡 Tips:</p>
             <ul style="text-align: left; display: inline-block;">
                 <li>Make sure your ESP32 is connected to WiFi</li>
-                <li>ESP32 should be accessible at <code>esp.local</code></li>
+                <li>ESP32 should be accessible at <code>esp-webjpeg.local</code> unless you set a different mDNS hostname when flashing</li>
                 <li>Select the correct display size for your AMOLED screen</li>
                 <li>Video is automatically scaled to match display dimensions</li>
                 <li>Choose between webcam or screen capture</li>
@@ -539,8 +540,139 @@
             }
         }
 
+        // Parse URL query parameters and populate form fields
+        function loadQueryParameters() {
+            const urlParams = new URLSearchParams(window.location.search);
+
+            // ESP32 Address: if this page was loaded directly from the ESP32 (not
+            // opened as a local file), default to that same origin - always correct
+            // regardless of which mDNS hostname was configured at flash time.
+            if (urlParams.has('espAddress')) {
+                espAddressInput.value = urlParams.get('espAddress');
+            } else if (window.location.origin.startsWith('http')) {
+                espAddressInput.value = window.location.origin;
+            }
+
+            // Display Size
+            if (urlParams.has('displaySize')) {
+                const size = urlParams.get('displaySize');
+                // Check if it's a predefined size or custom
+                const validSizes = ['536x240', '600x450', '194x368'];
+                if (validSizes.includes(size)) {
+                    displaySizeSelect.value = size;
+                } else if (size === 'custom' || size.includes('x')) {
+                    displaySizeSelect.value = 'custom';
+                    customSizeDiv.style.display = 'block';
+                    
+                    // Parse custom dimensions if provided in WxH format
+                    if (size !== 'custom' && size.includes('x')) {
+                        const [w, h] = size.split('x').map(Number);
+                        if (!isNaN(w) && !isNaN(h)) {
+                            customWidthInput.value = w;
+                            customHeightInput.value = h;
+                        }
+                    }
+                }
+            }
+            
+            // Custom Width
+            if (urlParams.has('customWidth')) {
+                const w = parseInt(urlParams.get('customWidth'));
+                if (!isNaN(w)) {
+                    customWidthInput.value = w;
+                    if (displaySizeSelect.value !== 'custom') {
+                        displaySizeSelect.value = 'custom';
+                        customSizeDiv.style.display = 'block';
+                    }
+                }
+            }
+            
+            // Custom Height
+            if (urlParams.has('customHeight')) {
+                const h = parseInt(urlParams.get('customHeight'));
+                if (!isNaN(h)) {
+                    customHeightInput.value = h;
+                    if (displaySizeSelect.value !== 'custom') {
+                        displaySizeSelect.value = 'custom';
+                        customSizeDiv.style.display = 'block';
+                    }
+                }
+            }
+            
+            // Source Type
+            if (urlParams.has('sourceType')) {
+                const source = urlParams.get('sourceType');
+                if (source === 'camera' || source === 'screen') {
+                    sourceTypeSelect.value = source;
+                }
+            }
+            
+            // Frame Rate
+            if (urlParams.has('frameRate')) {
+                const fps = parseInt(urlParams.get('frameRate'));
+                if (!isNaN(fps) && fps >= 1 && fps <= 30) {
+                    frameRateInput.value = fps;
+                }
+            }
+            
+            // JPEG Quality
+            if (urlParams.has('quality')) {
+                const q = parseFloat(urlParams.get('quality'));
+                if (!isNaN(q) && q >= 0.1 && q <= 1.0) {
+                    qualitySlider.value = q;
+                    qualityValue.textContent = q;
+                }
+            }
+            
+            // Monochrome Mode
+            if (urlParams.has('monoMode')) {
+                const mono = urlParams.get('monoMode');
+                monoModeCheckbox.checked = (mono === 'true' || mono === '1' || mono === 'yes');
+            }
+        }
+
+        // Auto-detect board configuration from ESP32
+        async function detectBoardConfig() {
+            try {
+                const espAddress = espAddressInput.value.trim();
+                const response = await fetch(espAddress + '/boardinfo');
+                if (response.ok) {
+                    const boardInfo = await response.json();
+                    console.log('Detected board:', boardInfo);
+                    
+                    // Auto-set display size based on detected board
+                    const detectedSize = `${boardInfo.width}x${boardInfo.height}`;
+                    
+                    // Check if it's a predefined size
+                    const options = Array.from(displaySizeSelect.options).map(opt => opt.value);
+                    if (options.includes(detectedSize)) {
+                        displaySizeSelect.value = detectedSize;
+                        customSizeDiv.style.display = 'none';
+                    } else {
+                        // Use custom size
+                        displaySizeSelect.value = 'custom';
+                        customWidthInput.value = boardInfo.width;
+                        customHeightInput.value = boardInfo.height;
+                        customSizeDiv.style.display = 'block';
+                    }
+                    
+                    updateStatus(`✅ Detected: ${boardInfo.name} (${boardInfo.width}x${boardInfo.height})`, 'success');
+                    return true;
+                }
+            } catch (err) {
+                console.log('Board auto-detection failed:', err);
+                updateStatus('⚠️ Could not auto-detect board. Using manual settings.', 'warning');
+            }
+            return false;
+        }
+
         // Auto-detect ESP32 if on local network
-        window.addEventListener('load', () => {
+        window.addEventListener('load', async () => {
+            loadQueryParameters();
+            
+            // Try to auto-detect board configuration
+            await detectBoardConfig();
+            
             console.log('Ready to stream to ESP32');
         });
     </script>
