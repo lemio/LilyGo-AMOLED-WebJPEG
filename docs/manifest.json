@@ -1,12 +1,12 @@
 {
   "site": {
     "title": "LilyGo AMOLED WebJPEG Flasher",
-    "subtitle": "Flash the browser-to-display WebJPEG streamer straight from your browser - no PlatformIO needed"
+    "subtitle": "Flash a browser-to-display video streamer straight from your browser - no PlatformIO needed"
   },
   "firmwares": {
     "webH264": {
-      "name": "webH264",
-      "description": "",
+      "name": "WebH264 Stream Display",
+      "description": "Streams a browser tab or window to the AMOLED display over WiFi as H.264, encoded in-browser with WebCodecs and decoded on-device. Sharper image and much lower bandwidth than WebJPEG at the same quality, at the cost of a slower decoder (roughly 3-5fps). T4-S3 (2.41\", 600x450) only.",
       "files": [
         {
           "path": "firmware/webH264/bootloader.bin",
@@ -25,11 +25,33 @@
           "offset": 65536
         }
       ],
-      "hardware": "T-Display-AMOLED"
+      "hardware": "T4-S3",
+      "variables": [
+        {
+          "firmware_name": "|*S*|",
+          "readable_name": "WiFi Name (SSID)",
+          "default_value": "",
+          "max_length": 100
+        },
+        {
+          "firmware_name": "|*P*|",
+          "readable_name": "WiFi Password",
+          "default_value": "",
+          "max_length": 100
+        },
+        {
+          "firmware_name": "esp-webh264",
+          "readable_name": "mDNS Hostname",
+          "default_value": "esp-webh264",
+          "postfix": ".local",
+          "max_length": 100
+        }
+      ],
+      "sourceUrl": "https://github.com/lemio/LilyGo-AMOLED-WebJPEG/tree/main/examples/webH264"
     },
     "webJPEG": {
-      "name": "webJPEG",
-      "description": "",
+      "name": "WebJPEG Stream Display",
+      "description": "Streams a browser tab, camera, or screen share to the AMOLED display over WiFi as MJPEG frames. Auto-detects the attached panel at boot, so this one firmware works on the 1.47\" Lite, 1.91\", and 2.41\"/T4-S3 T-Display AMOLED boards.",
       "files": [
         {
           "path": "firmware/webJPEG/bootloader.bin",
@@ -48,7 +70,29 @@
           "offset": 65536
         }
       ],
-      "hardware": "T-Display-AMOLED"
+      "hardware": "T-Display-AMOLED",
+      "variables": [
+        {
+          "firmware_name": "|*S*|",
+          "readable_name": "WiFi Name (SSID)",
+          "default_value": "",
+          "max_length": 100
+        },
+        {
+          "firmware_name": "|*P*|",
+          "readable_name": "WiFi Password",
+          "default_value": "",
+          "max_length": 100
+        },
+        {
+          "firmware_name": "esp-webjpeg",
+          "readable_name": "mDNS Hostname",
+          "default_value": "esp-webjpeg",
+          "postfix": ".local",
+          "max_length": 100
+        }
+      ],
+      "sourceUrl": "https://github.com/lemio/LilyGo-AMOLED-WebJPEG/tree/main/examples/webJPEG"
     }
   }
 }

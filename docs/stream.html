@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 AMOLED Video Stream</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+        video {
+            max-width: 100%;
+            width: 640px;
+            border: 3px solid #333;
+            border-radius: 10px;
+            margin: 20px 0;
+            background: #000;
+        }
+        button {
+            padding: 15px 40px;
+            font-size: 18px;
+            margin: 10px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            transition: all 0.3s;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+        }
+        button:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(76, 175, 80, 0.4);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
+            white-space: pre-line;
+        }
+        .success { background: #4CAF50; }
+        .error { background: #f44336; }
+        .info { background: #2196F3; }
+        .warning { background: #ff9800; }
+        .stats {
+            background: rgba(33, 33, 33, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-family: 'Courier New', monospace;
+        }
+        .stats div {
+            margin: 5px 0;
+        }
+        .config {
+            background: rgba(33, 33, 33, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            text-align: left;
+        }
+        .config label {
+            display: inline-block;
+            width: 150px;
+            margin: 10px 0;
+        }
+        .config input, .config select {
+            width: 200px;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #555;
+            background: #222;
+            color: white;
+        }
+        .quality-slider {
+            width: 200px;
+        }
+        .variant-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .variant-jpeg { background: #2196F3; }
+        .variant-h264 { background: #9c27b0; }
+        .variant-unknown { background: #666; }
+        .mode-jpeg-only, .mode-h264-only { display: none; }
+        body.mode-jpeg .mode-jpeg-only { display: block; }
+        body.mode-h264 .mode-h264-only { display: block; }
+        .hint {
+            font-size: 12px;
+            color: #999;
+            margin: 4px 0 10px 150px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 ESP32 AMOLED Video Stream</h1>
+        <p>Stream a browser tab, window, or camera to your LilyGo AMOLED board over WiFi
+            <span id="variantBadge" class="variant-badge variant-unknown">detecting...</span></p>
+
+        <div class="config">
+            <h3>⚙️ Configuration</h3>
+            <div>
+                <label>ESP32 Address:</label>
+                <input type="text" id="espAddress" placeholder="http://esp-webjpeg.local">
+            </div>
+            <div>
+                <label>Mode:</label>
+                <select id="modeOverride">
+                    <option value="auto" selected>Auto-detect (recommended)</option>
+                    <option value="jpeg">Force WebJPEG</option>
+                    <option value="h264">Force WebH264</option>
+                </select>
+            </div>
+            <div class="hint" id="modeHint">Enter the address above - the page will detect which firmware is running and show the matching options below.</div>
+
+            <div class="mode-jpeg-only">
+                <div>
+                    <label>Display Size:</label>
+                    <select id="displaySize">
+                        <option value="536x240" selected>536x240 (1.91" AMOLED)</option>
+                        <option value="450x600">450x600 (2.41" AMOLED)</option>
+                        <option value="194x368">194x368 (1.47" AMOLED)</option>
+                        <option value="custom">Custom...</option>
+                    </select>
+                </div>
+                <div id="customSizeDiv" style="display: none;">
+                    <label>Custom Size:</label>
+                    <input type="number" id="customWidth" placeholder="Width" style="width: 90px;">
+                    x
+                    <input type="number" id="customHeight" placeholder="Height" style="width: 90px;">
+                </div>
+                <div>
+                    <label>Frame Rate (FPS):</label>
+                    <input type="number" id="frameRate" value="6" min="1" max="30">
+                </div>
+                <div>
+                    <label>JPEG Quality:</label>
+                    <input type="range" id="quality" class="quality-slider" value="0.7" min="0.1" max="1.0" step="0.1">
+                    <span id="qualityValue">0.7</span>
+                </div>
+                <div>
+                    <label>
+                        <input type="checkbox" id="monoMode" style="width: auto; margin-right: 8px;">
+                        🎨 Monochrome Mode (faster, smaller files)
+                    </label>
+                </div>
+            </div>
+
+            <div class="mode-h264-only">
+                <div>
+                    <label>Resolution:</label>
+                    <span>600x450 (fixed - T4-S3 only)</span>
+                </div>
+                <div>
+                    <label>Capture FPS:</label>
+                    <input type="number" id="h264FpsInput" value="5" min="1" max="60">
+                </div>
+                <div>
+                    <label>Frames in flight:</label>
+                    <select id="maxInFlightSelect">
+                        <option value="1" selected>1 - lowest latency</option>
+                        <option value="2">2 - a bit more throughput</option>
+                    </select>
+                </div>
+                <div>
+                    <label>
+                        <input type="checkbox" id="ignoreAcksCheckbox" style="width: auto; margin-right: 8px;">
+                        Ignore device acks (no flow control - smoother capture, unbounded latency)
+                    </label>
+                </div>
+            </div>
+
+            <div class="mode-jpeg-only">
+                <div>
+                    <label>Source:</label>
+                    <select id="sourceType">
+                        <option value="camera">📹 Webcam</option>
+                        <option value="screen" selected>🖥️ Screen Share</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+
+        <div>
+            <button id="startBtn">▶️ Start Streaming</button>
+            <button id="stopBtn" disabled>⏹️ Stop Streaming</button>
+        </div>
+
+        <div id="status" class="status info">📡 Ready to stream</div>
+
+        <div class="stats mode-jpeg-only">
+            <h3>📊 Statistics</h3>
+            <div>
+                <div>Frames Sent: <span id="frameCount">0</span></div>
+                <div>Errors: <span id="errorCount">0</span></div>
+                <div>Data Sent: <span id="dataSize">0 KB</span></div>
+                <div>Actual FPS: <span id="actualFPS">0</span></div>
+                <div>Avg Frame Size: <span id="avgFrameSize">0 KB</span></div>
+            </div>
+        </div>
+
+        <div style="margin-top: 20px; font-size: 12px; color: #888;">
+            <p>💡 Tips:</p>
+            <ul style="text-align: left; display: inline-block;">
+                <li>Make sure your ESP32 is connected to WiFi</li>
+                <li>Reachable at <code>esp-webjpeg.local</code> / <code>esp-webh264.local</code> unless you set a different mDNS hostname when flashing</li>
+                <li>Screen share works in Chrome, Edge, and Firefox (WebH264 needs Chrome or Edge for WebCodecs)</li>
+                <li>Grant camera/screen permissions when prompted</li>
+                <li class="mode-jpeg-only">Display size auto-detects from the board - override the dropdown manually if it's wrong or unreachable</li>
+                <li class="mode-jpeg-only">Lower frame rate or quality if stream is laggy</li>
+                <li class="mode-h264-only">The on-device decoder tops out around 3-5fps - open the browser console (F12) for detailed per-frame logs</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // ---- Shared DOM refs ----
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const espAddressInput = document.getElementById('espAddress');
+        const modeOverrideSelect = document.getElementById('modeOverride');
+        const variantBadge = document.getElementById('variantBadge');
+        const modeHint = document.getElementById('modeHint');
+
+        // ---- JPEG-mode DOM refs ----
+        const frameRateInput = document.getElementById('frameRate');
+        const qualitySlider = document.getElementById('quality');
+        const qualityValue = document.getElementById('qualityValue');
+        const sourceTypeSelect = document.getElementById('sourceType');
+        const displaySizeSelect = document.getElementById('displaySize');
+        const customSizeDiv = document.getElementById('customSizeDiv');
+        const customWidthInput = document.getElementById('customWidth');
+        const customHeightInput = document.getElementById('customHeight');
+        const monoModeCheckbox = document.getElementById('monoMode');
+
+        // ---- H264-mode DOM refs ----
+        const h264FpsInput = document.getElementById('h264FpsInput');
+        const maxInFlightSelect = document.getElementById('maxInFlightSelect');
+        const ignoreAcksCheckbox = document.getElementById('ignoreAcksCheckbox');
+
+        let streaming = false;
+        let activeMode = null; // 'jpeg' or 'h264' - which pipeline is actually running
+        let detectedVariant = null; // 'jpeg' | 'h264' | null (detection not yet succeeded)
+        let ws = null;
+        let wsConnected = false;
+
+        // ============================================================
+        // Mode detection / UI switching
+        // ============================================================
+
+        function effectiveMode() {
+            const override = modeOverrideSelect.value;
+            return override === 'auto' ? detectedVariant : override;
+        }
+
+        function applyModeUI() {
+            const mode = effectiveMode();
+            document.body.classList.remove('mode-jpeg', 'mode-h264');
+            if (mode === 'jpeg') {
+                document.body.classList.add('mode-jpeg');
+            } else if (mode === 'h264') {
+                document.body.classList.add('mode-h264');
+            }
+
+            if (detectedVariant) {
+                variantBadge.textContent = detectedVariant === 'jpeg' ? 'WebJPEG detected' : 'WebH264 detected';
+                variantBadge.className = 'variant-badge variant-' + detectedVariant;
+            } else {
+                variantBadge.textContent = 'not detected';
+                variantBadge.className = 'variant-badge variant-unknown';
+            }
+
+            modeHint.style.display = mode ? 'none' : 'block';
+            startBtn.disabled = streaming || !mode;
+        }
+
+        // Fetches /boardinfo from the device to figure out which firmware variant is
+        // running (webJPEG vs webH264) and, for webJPEG, its actual panel resolution -
+        // this is the only place that tells the two examples apart, since they're
+        // otherwise served from this same page. Cross-origin since this page is served
+        // from GitHub Pages, not the board itself; the board sends
+        // Access-Control-Allow-Origin: * to allow it. Silently leaves the current state
+        // alone on any failure (unreachable board, no espAddress yet, etc).
+        async function detectBoardConfig() {
+            const espAddress = espAddressInput.value.trim();
+            if (!espAddress) {
+                detectedVariant = null;
+                applyModeUI();
+                return false;
+            }
+            try {
+                const response = await fetch(espAddress + '/boardinfo');
+                if (!response.ok) return false;
+                const boardInfo = await response.json();
+                detectedVariant = (boardInfo.variant === 'h264') ? 'h264' : 'jpeg';
+
+                if (detectedVariant === 'jpeg' && boardInfo.width && boardInfo.height) {
+                    const detectedSize = `${boardInfo.width}x${boardInfo.height}`;
+                    const options = Array.from(displaySizeSelect.options).map(opt => opt.value);
+                    if (options.includes(detectedSize)) {
+                        displaySizeSelect.value = detectedSize;
+                        customSizeDiv.style.display = 'none';
+                    } else {
+                        displaySizeSelect.value = 'custom';
+                        customWidthInput.value = boardInfo.width;
+                        customHeightInput.value = boardInfo.height;
+                        customSizeDiv.style.display = 'block';
+                    }
+                }
+
+                console.log('Detected board:', boardInfo);
+                applyModeUI();
+                return true;
+            } catch (err) {
+                console.log('Board auto-detection failed:', err);
+                return false;
+            }
+        }
+
+        modeOverrideSelect.addEventListener('change', applyModeUI);
+        espAddressInput.addEventListener('change', detectBoardConfig);
+
+        qualitySlider.addEventListener('input', (e) => {
+            qualityValue.textContent = e.target.value;
+        });
+
+        displaySizeSelect.addEventListener('change', (e) => {
+            customSizeDiv.style.display = (e.target.value === 'custom') ? 'block' : 'none';
+        });
+
+        function updateStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+        }
+
+        // ============================================================
+        // Shared start/stop dispatch
+        // ============================================================
+
+        startBtn.addEventListener('click', async () => {
+            // Re-check in case espAddress was typed/changed by hand since page load or
+            // the last detection (the load-time detection covers the common case).
+            await detectBoardConfig();
+            const mode = effectiveMode();
+            if (!mode) {
+                updateStatus('❌ Could not detect firmware variant - check the address or pick a Mode manually', 'error');
+                return;
+            }
+            if (mode === 'h264' && (!('MediaStreamTrackProcessor' in window) || !('VideoEncoder' in window))) {
+                updateStatus('❌ This browser lacks WebCodecs support (use a recent Chrome or Edge)', 'error');
+                return;
+            }
+
+            activeMode = mode;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            if (mode === 'jpeg') {
+                await startJpegStreaming();
+            } else {
+                await startH264Streaming();
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            if (activeMode === 'jpeg') {
+                stopJpegStreaming();
+            } else if (activeMode === 'h264') {
+                stopH264Streaming();
+            }
+            activeMode = null;
+            applyModeUI();
+        });
+
+        // ============================================================
+        // WebJPEG pipeline (canvas -> JPEG blob -> WebSocket)
+        // ============================================================
+
+        let frameCount = 0;
+        let errorCount = 0;
+        let totalDataSize = 0;
+        let lastFrameTime = 0;
+        let fpsHistory = [];
+        let frameSizeHistory = [];
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 10;
+        let reconnectDelay = 2000;
+        let reconnectTimer = null;
+
+        function getDisplayDimensions() {
+            const sizeValue = displaySizeSelect.value;
+            if (sizeValue === 'custom') {
+                const w = parseInt(customWidthInput.value) || 536;
+                const h = parseInt(customHeightInput.value) || 240;
+                return { width: w, height: h };
+            } else {
+                const [width, height] = sizeValue.split('x').map(Number);
+                return { width, height };
+            }
+        }
+
+        function updateJpegStats(frameSize) {
+            document.getElementById('frameCount').textContent = frameCount;
+            document.getElementById('errorCount').textContent = errorCount;
+            document.getElementById('dataSize').textContent = (totalDataSize / 1024).toFixed(2);
+
+            const now = Date.now();
+            if (lastFrameTime > 0) {
+                const fps = 1000 / (now - lastFrameTime);
+                fpsHistory.push(fps);
+                if (fpsHistory.length > 10) fpsHistory.shift();
+                const avgFps = fpsHistory.reduce((a, b) => a + b, 0) / fpsHistory.length;
+                document.getElementById('actualFPS').textContent = avgFps.toFixed(1);
+            }
+            lastFrameTime = now;
+
+            if (frameSize) {
+                frameSizeHistory.push(frameSize);
+                if (frameSizeHistory.length > 10) frameSizeHistory.shift();
+                const avgSize = frameSizeHistory.reduce((a, b) => a + b, 0) / frameSizeHistory.length;
+                document.getElementById('avgFrameSize').textContent = (avgSize / 1024).toFixed(2);
+            }
+        }
+
+        function connectJpegWebSocket() {
+            return new Promise((resolve, reject) => {
+                const espAddress = espAddressInput.value.trim();
+                const isMono = monoModeCheckbox.checked;
+                const wsEndpoint = isMono ? '/ws-mono' : '/ws';
+                const wsUrl = espAddress.replace('http://', 'ws://').replace('https://', 'wss://') + wsEndpoint;
+
+                updateStatus(`🔌 Connecting to ${isMono ? 'monochrome' : 'color'} WebSocket...`, 'info');
+
+                ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer';
+
+                ws.onopen = () => {
+                    wsConnected = true;
+                    reconnectAttempts = 0;
+                    reconnectDelay = 2000;
+                    console.log('WebSocket connected!');
+                    resolve();
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    wsConnected = false;
+                    reject(error);
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket closed');
+                    const wasConnected = wsConnected;
+                    wsConnected = false;
+
+                    if (streaming && wasConnected) {
+                        updateStatus('⚠️ Connection lost - attempting to reconnect...', 'warning');
+                        attemptJpegReconnect();
+                    }
+                };
+            });
+        }
+
+        function attemptJpegReconnect() {
+            if (!streaming) return;
+
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                updateStatus('❌ Max reconnection attempts reached', 'error');
+                stopJpegStreaming();
+                return;
+            }
+
+            reconnectAttempts++;
+            updateStatus(`🔄 Reconnecting (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`, 'warning');
+
+            if (reconnectTimer) clearTimeout(reconnectTimer);
+
+            const currentDelay = Math.min(reconnectDelay * Math.pow(1.5, reconnectAttempts - 1), 30000);
+
+            reconnectTimer = setTimeout(async () => {
+                try {
+                    await connectJpegWebSocket();
+                    updateStatus('✅ Reconnected successfully!', 'success');
+                } catch (err) {
+                    console.error('Reconnection failed:', err);
+                }
+            }, currentDelay);
+        }
+
+        async function startJpegStreaming() {
+            try {
+                await connectJpegWebSocket();
+
+                const sourceType = sourceTypeSelect.value;
+                let stream;
+
+                if (sourceType === 'screen') {
+                    updateStatus('🖥️ Requesting screen share...', 'info');
+                    const displayDims = getDisplayDimensions();
+                    stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: {
+                            width: { ideal: displayDims.width },
+                            height: { ideal: displayDims.height },
+                            frameRate: { ideal: parseInt(frameRateInput.value) || 30 }
+                        },
+                        audio: false
+                    });
+                } else {
+                    updateStatus('🎥 Requesting camera access...', 'info');
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 640 },
+                            height: { ideal: 480 },
+                            facingMode: 'user'
+                        }
+                    });
+                }
+
+                video.srcObject = stream;
+                streaming = true;
+                frameCount = 0;
+                errorCount = 0;
+                totalDataSize = 0;
+                fpsHistory = [];
+                frameSizeHistory = [];
+
+                updateStatus('✅ Streaming active', 'success');
+
+                video.onloadedmetadata = () => {
+                    sendJpegFrame();
+                };
+
+                stream.getVideoTracks()[0].addEventListener('ended', () => {
+                    console.log('Stream ended by user');
+                    stopJpegStreaming();
+                    activeMode = null;
+                    applyModeUI();
+                });
+
+            } catch (err) {
+                console.error('Error starting stream:', err);
+
+                if (err.name === 'NotAllowedError') {
+                    updateStatus('❌ Permission denied', 'error');
+                } else if (err.name === 'NotFoundError') {
+                    updateStatus('❌ Source not found', 'error');
+                } else if (err.name === 'NotSupportedError') {
+                    updateStatus('❌ Screen capture not supported', 'error');
+                } else {
+                    updateStatus('❌ Error: ' + err.message, 'error');
+                }
+
+                if (ws && wsConnected) {
+                    ws.close();
+                    ws = null;
+                }
+                streaming = false;
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+            }
+        }
+
+        function stopJpegStreaming() {
+            streaming = false;
+
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            reconnectAttempts = 0;
+
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+
+            if (ws && wsConnected) {
+                ws.close();
+                ws = null;
+                wsConnected = false;
+            }
+
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            updateStatus('⏹️ Streaming stopped', 'info');
+        }
+
+        async function sendJpegFrame() {
+            if (!streaming || !wsConnected || !ws) return;
+
+            const displayDims = getDisplayDimensions();
+            const isMono = monoModeCheckbox.checked;
+
+            if (video.videoWidth && video.videoHeight) {
+                canvas.width = displayDims.width;
+                canvas.height = displayDims.height;
+
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                if (isMono) {
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                        data[i] = gray;
+                        data[i + 1] = gray;
+                        data[i + 2] = gray;
+                    }
+                    ctx.putImageData(imageData, 0, 0);
+                }
+
+                const quality = parseFloat(qualitySlider.value);
+
+                canvas.toBlob(async (blob) => {
+                    if (blob && streaming && wsConnected) {
+                        try {
+                            const arrayBuffer = await blob.arrayBuffer();
+
+                            if (ws.readyState === WebSocket.OPEN) {
+                                ws.send(arrayBuffer);
+                                frameCount++;
+                                totalDataSize += arrayBuffer.byteLength;
+                                updateJpegStats(arrayBuffer.byteLength);
+                            }
+                        } catch (err) {
+                            errorCount++;
+                            updateJpegStats();
+                            console.error('WebSocket send error:', err);
+                            updateStatus('⚠️ Connection issue', 'warning');
+                        }
+                    }
+
+                    if (streaming) {
+                        const fps = parseInt(frameRateInput.value) || 6;
+                        const delay = 1000 / fps;
+                        setTimeout(sendJpegFrame, delay);
+                    }
+                }, 'image/jpeg', quality);
+            } else {
+                if (streaming) {
+                    setTimeout(sendJpegFrame, 100);
+                }
+            }
+        }
+
+        // ============================================================
+        // WebH264 pipeline (WebCodecs VideoEncoder -> WebSocket)
+        // ============================================================
+
+        const H264_WIDTH = 600;
+        const H264_HEIGHT = 450;
+        const H264_KEYFRAME_INTERVAL_MS = 2000;
+        // Not a pacing knob - TCP guarantees an ack isn't silently lost, so this only
+        // protects against a genuinely stuck/crashed device: without it, a missing ack
+        // could wedge the in-flight window shut forever.
+        const H264_STALL_TIMEOUT_MS = 3000;
+        // DOM writes are surprisingly expensive (can force a style/layout
+        // recalculation) and dropped frames can happen at native capture rate
+        // (every ~16-50ms) - stats are only ever written to the DOM on this timer,
+        // never from inside the hot per-frame path.
+        const H264_STATS_UPDATE_INTERVAL_MS = 250;
+
+        let h264Encoder = null;
+        let h264IgnoreAcks = false;
+        let h264MaxInFlight = 1;
+        // FIFO of { sentAt } for frames sent but not yet acked. Acks arrive in the same
+        // order frames were sent (single TCP stream, processed synchronously on the
+        // device), so shifting the oldest entry off on each ack is always correct.
+        let h264InFlight = [];
+        let h264LastEncodeStart = 0;
+        let h264LastKeyframeAt = 0;
+        let h264SentCount = 0;
+        let h264DroppedCount = 0;
+        let h264AckCount = 0;
+        let h264StatsTimer = null;
+        let h264StreamStartTime = 0;
+        let h264LastFrameTimestamp = null;
+        let h264LastReadWallTime = null;
+        const h264ConfigInputs = [h264FpsInput, maxInFlightSelect, ignoreAcksCheckbox];
+
+        function h264Log(...args) {
+            const t = h264StreamStartTime ? (performance.now() - h264StreamStartTime).toFixed(1) : '0.0';
+            console.log(`[h264 +${t}ms]`, ...args);
+        }
+
+        function updateH264Status() {
+            const mode = h264IgnoreAcks ? 'acks ignored' : `inFlight=${h264InFlight.length}/${h264MaxInFlight}`;
+            updateStatus(`📡 Streaming (${mode})... sent ${h264SentCount}, dropped ${h264DroppedCount}, acked ${h264AckCount}`, 'success');
+        }
+
+        async function startH264Streaming() {
+            const espAddress = espAddressInput.value.trim();
+            if (!espAddress) {
+                updateStatus('❌ Enter the ESP32 address first', 'error');
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                return;
+            }
+            const host = espAddress.replace(/^https?:\/\//, '');
+
+            h264Log('connecting to', host);
+            ws = new WebSocket(`ws://${host}/video-stream`);
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = () => {
+                h264Log('WS open');
+                updateStatus('🔌 Connected, starting capture...', 'info');
+                startH264Capture();
+            };
+            ws.onclose = (evt) => {
+                h264Log('WS closed, code=', evt.code, 'reason=', evt.reason || '(none)', 'wasClean=', evt.wasClean);
+                updateStatus('⏹️ Disconnected', 'info');
+                stopH264Streaming();
+                activeMode = null;
+                applyModeUI();
+            };
+            ws.onerror = (err) => {
+                h264Log('WS error', err);
+                console.error('WebSocket error:', err);
+            };
+            // Any message from the device is an ack that it's ready for another frame.
+            ws.onmessage = (evt) => {
+                h264AckCount++;
+                if (h264IgnoreAcks) return;
+                if (h264InFlight.length === 0) {
+                    h264Log(`ack #${h264AckCount} WARN: nothing was in flight (stray/duplicate ack, or its stall timeout already fired)`);
+                    return;
+                }
+                const entry = h264InFlight.shift();
+                const rtt = performance.now() - entry.sentAt;
+                h264Log(`ack #${h264AckCount} rtt=${rtt.toFixed(1)}ms inFlight now=${h264InFlight.length}/${h264MaxInFlight}`);
+            };
+        }
+
+        async function startH264Capture() {
+            try {
+                const fps = Math.max(1, parseInt(h264FpsInput.value, 10) || 5);
+                h264IgnoreAcks = ignoreAcksCheckbox.checked;
+                h264MaxInFlight = Math.max(1, parseInt(maxInFlightSelect.value, 10) || 1);
+
+                const mediaStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { width: { ideal: H264_WIDTH }, height: { ideal: H264_HEIGHT }, frameRate: { ideal: fps } },
+                    audio: false
+                });
+                video.srcObject = mediaStream;
+
+                const [videoTrack] = mediaStream.getVideoTracks();
+                h264Log('capture started, track settings:', JSON.stringify(videoTrack.getSettings()));
+                videoTrack.onended = () => {
+                    h264Log('capture track ended');
+                    stopH264Streaming();
+                    activeMode = null;
+                    applyModeUI();
+                };
+
+                const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+                const reader = trackProcessor.readable.getReader();
+
+                h264Encoder = new VideoEncoder({
+                    output: (chunk) => {
+                        const now = performance.now();
+                        h264Log(`encoder output: type=${chunk.type} size=${chunk.byteLength}B encodeLatency=${(now - h264LastEncodeStart).toFixed(1)}ms`);
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            const buffer = new Uint8Array(chunk.byteLength);
+                            chunk.copyTo(buffer);
+                            ws.send(buffer);
+                        } else {
+                            h264Log('WARN: encoder produced output but ws is not open - this frame is LOST');
+                        }
+                    },
+                    error: (e) => {
+                        h264Log('encoder error', e);
+                        console.error('Encoder error:', e);
+                    }
+                });
+
+                // width/height here must match H264_DECODE_MAX_WIDTH/HEIGHT and the
+                // DISPLAY_WIDTH/HEIGHT checks in webH264.cpp.
+                h264Encoder.configure({
+                    codec: 'avc1.42E01E',   // H.264 constrained baseline, the profile the
+                                             // ESP32 SW decoder supports
+                    width: H264_WIDTH,
+                    height: H264_HEIGHT,
+                    bitrate: 700_000,
+                    bitrateMode: 'constant',
+                    latencyMode: 'realtime',
+                    avc: { format: 'annexb' }
+                });
+
+                h264StreamStartTime = performance.now();
+                h264LastKeyframeAt = 0;
+                h264SentCount = 0;
+                h264DroppedCount = 0;
+                h264AckCount = 0;
+                h264InFlight = [];
+                h264LastFrameTimestamp = null;
+                h264LastReadWallTime = null;
+                if (h264StatsTimer) clearInterval(h264StatsTimer);
+                h264StatsTimer = setInterval(updateH264Status, H264_STATS_UPDATE_INTERVAL_MS);
+                updateStatus('✅ Streaming active', 'success');
+                streaming = true;
+                h264ConfigInputs.forEach((el) => { el.disabled = true; });
+                h264Log(`config: ${H264_WIDTH}x${H264_HEIGHT} @ requested ${fps}fps, keyframe every ${H264_KEYFRAME_INTERVAL_MS}ms, ` +
+                    `ignoreAcks=${h264IgnoreAcks}, maxInFlight=${h264MaxInFlight}, stall timeout ${H264_STALL_TIMEOUT_MS}ms`);
+                readH264Frames(reader);
+            } catch (err) {
+                console.error('Failed to start capture:', err);
+                updateStatus('❌ Failed to start: ' + err.message, 'error');
+                stopH264Streaming();
+                activeMode = null;
+                applyModeUI();
+            }
+        }
+
+        async function readH264Frames(reader) {
+            while (streaming && video.srcObject && video.srcObject.active && h264Encoder && h264Encoder.state === 'configured') {
+                const { done, value } = await reader.read();
+                if (done) {
+                    h264Log('reader: stream ended');
+                    break;
+                }
+
+                const now = performance.now();
+                if (h264LastFrameTimestamp !== null) {
+                    const frameDeltaMs = (value.timestamp - h264LastFrameTimestamp) / 1000;
+                    const wallDeltaMs = now - h264LastReadWallTime;
+                    h264Log(`read: frameTs+${frameDeltaMs.toFixed(1)}ms wall+${wallDeltaMs.toFixed(1)}ms${Math.abs(frameDeltaMs - wallDeltaMs) > 30 ? '  <-- MISMATCH, possible backlog' : ''}`);
+                }
+                h264LastFrameTimestamp = value.timestamp;
+                h264LastReadWallTime = now;
+
+                if (!h264IgnoreAcks) {
+                    while (h264InFlight.length && now - h264InFlight[0].sentAt >= H264_STALL_TIMEOUT_MS) {
+                        h264Log(`WARN: stall timeout exceeded; giving up on its ack`);
+                        h264InFlight.shift();
+                    }
+                    if (h264InFlight.length >= h264MaxInFlight) {
+                        h264DroppedCount++;
+                        value.close();
+                        continue;
+                    }
+                }
+
+                const isKeyFrame = (now - h264LastKeyframeAt >= H264_KEYFRAME_INTERVAL_MS);
+                if (isKeyFrame) h264LastKeyframeAt = now;
+
+                if (!h264IgnoreAcks) {
+                    h264InFlight.push({ sentAt: now });
+                }
+                h264LastEncodeStart = now;
+                h264Encoder.encode(value, { keyFrame: isKeyFrame });
+                value.close();
+                h264SentCount++;
+            }
+            h264Log('readH264Frames loop exited');
+        }
+
+        function stopH264Streaming() {
+            h264Log('stopH264Streaming');
+            streaming = false;
+            if (h264StatsTimer) {
+                clearInterval(h264StatsTimer);
+                h264StatsTimer = null;
+            }
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach((track) => track.stop());
+                video.srcObject = null;
+            }
+            if (h264Encoder && h264Encoder.state !== 'closed') {
+                h264Encoder.close();
+            }
+            h264Encoder = null;
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            h264InFlight = [];
+            h264ConfigInputs.forEach((el) => { el.disabled = false; });
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            updateStatus('⏹️ Streaming stopped', 'info');
+        }
+
+        // ============================================================
+        // Page load
+        // ============================================================
+
+        // Populates form fields from URL query parameters, useful for bookmarking a
+        // specific setup (the boards' own "/" redirect only ever sets espAddress).
+        function loadQueryParameters() {
+            const urlParams = new URLSearchParams(window.location.search);
+
+            if (urlParams.has('espAddress')) {
+                espAddressInput.value = urlParams.get('espAddress');
+            }
+
+            if (urlParams.has('mode')) {
+                const mode = urlParams.get('mode');
+                if (['auto', 'jpeg', 'h264'].includes(mode)) {
+                    modeOverrideSelect.value = mode;
+                }
+            }
+
+            // WebJPEG-only parameters
+            if (urlParams.has('displaySize')) {
+                const size = urlParams.get('displaySize');
+                const validSizes = ['536x240', '450x600', '194x368'];
+                if (validSizes.includes(size)) {
+                    displaySizeSelect.value = size;
+                } else if (size === 'custom' || size.includes('x')) {
+                    displaySizeSelect.value = 'custom';
+                    customSizeDiv.style.display = 'block';
+                    if (size !== 'custom') {
+                        const [w, h] = size.split('x').map(Number);
+                        if (!isNaN(w) && !isNaN(h)) {
+                            customWidthInput.value = w;
+                            customHeightInput.value = h;
+                        }
+                    }
+                }
+            }
+            if (urlParams.has('customWidth')) {
+                const w = parseInt(urlParams.get('customWidth'));
+                if (!isNaN(w)) {
+                    customWidthInput.value = w;
+                    displaySizeSelect.value = 'custom';
+                    customSizeDiv.style.display = 'block';
+                }
+            }
+            if (urlParams.has('customHeight')) {
+                const h = parseInt(urlParams.get('customHeight'));
+                if (!isNaN(h)) {
+                    customHeightInput.value = h;
+                    displaySizeSelect.value = 'custom';
+                    customSizeDiv.style.display = 'block';
+                }
+            }
+            if (urlParams.has('sourceType')) {
+                const source = urlParams.get('sourceType');
+                if (source === 'camera' || source === 'screen') {
+                    sourceTypeSelect.value = source;
+                }
+            }
+            if (urlParams.has('frameRate')) {
+                const fps = parseInt(urlParams.get('frameRate'));
+                if (!isNaN(fps) && fps >= 1 && fps <= 30) {
+                    frameRateInput.value = fps;
+                }
+            }
+            if (urlParams.has('quality')) {
+                const q = parseFloat(urlParams.get('quality'));
+                if (!isNaN(q) && q >= 0.1 && q <= 1.0) {
+                    qualitySlider.value = q;
+                    qualityValue.textContent = q;
+                }
+            }
+            if (urlParams.has('monoMode')) {
+                const mono = urlParams.get('monoMode');
+                monoModeCheckbox.checked = (mono === 'true' || mono === '1' || mono === 'yes');
+            }
+
+            // WebH264-only parameters
+            if (urlParams.has('h264Fps')) {
+                const fps = parseInt(urlParams.get('h264Fps'));
+                if (!isNaN(fps) && fps >= 1 && fps <= 60) {
+                    h264FpsInput.value = fps;
+                }
+            }
+            if (urlParams.has('maxInFlight')) {
+                const v = urlParams.get('maxInFlight');
+                if (v === '1' || v === '2') {
+                    maxInFlightSelect.value = v;
+                }
+            }
+            if (urlParams.has('ignoreAcks')) {
+                const v = urlParams.get('ignoreAcks');
+                ignoreAcksCheckbox.checked = (v === 'true' || v === '1' || v === 'yes');
+            }
+        }
+
+        window.addEventListener('load', async () => {
+            loadQueryParameters();
+            applyModeUI();
+            await detectBoardConfig();
+            console.log('Ready to stream to ESP32');
+        });
+    </script>
+</body>
+</html>
