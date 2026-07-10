@@ -17,14 +17,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
-      # env must match the PlatformIO environment that builds that example
-      # (see platformio.ini).
       matrix:
-        include:
-          - example: examples/webJPEG
-            env: webJPEG
-          - example: examples/webH264
-            env: webH264
+        env: [webJPEG, webH264]
 
     steps:
       - uses: actions/checkout@v3
@@ -41,6 +35,4 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: Run PlatformIO
-        run: |
-          export PLATFORMIO_SRC_DIR=${{ matrix.example }}
-          pio run -e ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}

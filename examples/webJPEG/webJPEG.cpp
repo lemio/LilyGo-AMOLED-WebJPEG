@@ -1,5 +1,5 @@
 /**
- * @file      webJPEG.ino
+ * @file      webJPEG.cpp
  * @author    Modified for browser-to-display streaming
  * @license   MIT
  * @copyright Copyright (c) 2023  Shenzhen Xin Yuan Electronic Technology Co., Ltd
@@ -8,13 +8,14 @@
  *            This is plain WebSocket + MJPEG (canvas.toBlob), not the WebRTC protocol -
  *            no RTCPeerConnection/SDP/ICE. Optimized for maximum performance with
  *            direct rendering.
- * 
+ *
  * Required libraries:
  * - ESPAsyncWebServer: https://github.com/me-no-dev/ESPAsyncWebServer
  * - AsyncTCP: https://github.com/me-no-dev/AsyncTCP
  * - JPEGDecoder: https://github.com/Bodmer/JPEGDecoder
  */
 
+#include <Arduino.h>
 #include <LilyGo_AMOLED.h>
 #include <TFT_eSPI.h>
 #include <WiFi.h>
@@ -77,89 +78,89 @@ inline void swapBytes(uint16_t *data, size_t count) {
 
 void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
     uint32_t t1 = millis();
-    
+
     // Decode JPEG (already scaled to display size by web interface)
     if (!JpegDec.decodeArray(jpegData, jpegSize)) {
         Serial.println("JPEG decode failed!");
         return;
     }
-    
+
     uint32_t t2 = millis();
-    
+
     uint16_t w = JpegDec.width;
     uint16_t h = JpegDec.height;
-    
+
     if (w == 0 || h == 0) {
         Serial.println("Invalid JPEG dimensions!");
         return;
     }
-    
+
     // Check if JPEG matches display size exactly - if so, render directly
     bool directRender = (w == WIDTH && h == HEIGHT);
-    
-    Serial.printf("JPEG: %dx%d | Display: %dx%d | Direct: %s | MCU: %dx%d\n", 
-                  w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO", 
+
+    Serial.printf("JPEG: %dx%d | Display: %dx%d | Direct: %s | MCU: %dx%d\n",
+                  w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO",
                   JpegDec.MCUWidth, JpegDec.MCUHeight);
-    
+
     if (!directRender) {
         // Need to center - use sprite buffer
         spr.fillSprite(TFT_BLACK);
     }
-    
+
     // Calculate centering offset
     int16_t offsetX = (WIDTH - w) >> 1;  // Fast divide by 2
     int16_t offsetY = (HEIGHT - h) >> 1;
     if (offsetX < 0) offsetX = 0;
     if (offsetY < 0) offsetY = 0;
-    
+
     // Pre-fetch MCU dimensions
     uint16_t mcu_w = JpegDec.MCUWidth;
     uint16_t mcu_h = JpegDec.MCUHeight;
-    
+
     uint32_t t3 = millis();
-    
+
     // Render MCU blocks
     while (JpegDec.read()) {
         uint16_t *pImg = JpegDec.pImage;
-        
+
         // Calculate MCU position in the image
         uint16_t mcu_x = JpegDec.MCUx * mcu_w;
         uint16_t mcu_y = JpegDec.MCUy * mcu_h;
-        
+
         // Skip if MCU is completely outside image bounds
         if (mcu_x >= w || mcu_y >= h) continue;
-        
+
         // Calculate actual valid pixels in this MCU (clipped to image bounds)
         uint16_t valid_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
         uint16_t valid_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
-        
+
         if (valid_w == 0 || valid_h == 0) continue;
-        
+
         // Calculate destination on display
         int16_t destX = offsetX + mcu_x;
         int16_t destY = offsetY + mcu_y;
-        
+
         // Skip if destination is outside display bounds
         if (destX >= WIDTH || destY >= HEIGHT) continue;
-        
+
         // Calculate actual render dimensions (clipped to display bounds)
         uint16_t render_w = valid_w;
         uint16_t render_h = valid_h;
-        
+
         if (destX + render_w > WIDTH) {
             render_w = WIDTH - destX;
         }
         if (destY + render_h > HEIGHT) {
             render_h = HEIGHT - destY;
         }
-        
+
         if (render_w == 0 || render_h == 0) continue;
-        
+
         // For edge blocks, we need to extract only the valid portion from the MCU
         if (render_w != mcu_w || render_h != mcu_h) {
             // Create temporary buffer for the valid portion
             uint16_t tempBuffer[render_w * render_h];
-            
+
             // Copy valid pixels row by row from MCU buffer
             for (uint16_t row = 0; row < render_h; row++) {
                 for (uint16_t col = 0; col < render_w; col++) {
@@ -169,7 +170,7 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
                     tempBuffer[row * render_w + col] = directRender ? ((pixel >> 8) | (pixel << 8)) : pixel;
                 }
             }
-            
+
             if (directRender) {
                 amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
             } else {
@@ -187,76 +188,76 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
             }
         }
     }
-    
+
     uint32_t t4 = millis();
-    
+
     // Push sprite to display only if we used buffering
     if (!directRender) {
         amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
     }
-    
+
     uint32_t t5 = millis();
-    
+
     Serial.printf("Timing: Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
                   t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
 }
 
 void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
     uint32_t t1 = millis();
-    
+
     // Decode JPEG (grayscale)
     if (!JpegDec.decodeArray(jpegData, jpegSize)) {
         Serial.println("Mono JPEG decode failed!");
         return;
     }
-    
+
     uint32_t t2 = millis();
-    
+
     uint16_t w = JpegDec.width;
     uint16_t h = JpegDec.height;
-    
+
     if (w == 0 || h == 0) {
         Serial.println("Invalid JPEG dimensions!");
         return;
     }
-    
+
     Serial.printf("Mono JPEG: %dx%d | Display: %dx%d\n", w, h, WIDTH, HEIGHT);
-    
+
     bool directRender = (w == WIDTH && h == HEIGHT);
-    
+
     if (!directRender) {
         spr.fillSprite(TFT_BLACK);
     }
-    
+
     int16_t offsetX = (WIDTH - w) >> 1;
     int16_t offsetY = (HEIGHT - h) >> 1;
     if (offsetX < 0) offsetX = 0;
     if (offsetY < 0) offsetY = 0;
-    
+
     uint16_t mcu_w = JpegDec.MCUWidth;
     uint16_t mcu_h = JpegDec.MCUHeight;
-    
+
     uint32_t t3 = millis();
-    
+
     // Render MCU blocks - grayscale to display
     while (JpegDec.read()) {
         uint16_t *pImg = JpegDec.pImage;
-        
+
         uint16_t mcu_x = JpegDec.MCUx * mcu_w;
         uint16_t mcu_y = JpegDec.MCUy * mcu_h;
-        
+
         uint16_t render_w = (mcu_x + mcu_w <= w) ? mcu_w : (w - mcu_x);
         uint16_t render_h = (mcu_y + mcu_h <= h) ? mcu_h : (h - mcu_y);
-        
+
         // Bounds check - ensure we don't exceed image dimensions
         if (mcu_x >= w || mcu_y >= h) continue;
         if (render_w == 0 || render_h == 0) continue;
-        
+
         int16_t destX = offsetX + mcu_x;
         int16_t destY = offsetY + mcu_y;
-        
+
         if (destX >= WIDTH || destY >= HEIGHT) continue;
-        
+
         // Clip width/height to display bounds
         if (destX + render_w > WIDTH) {
             render_w = WIDTH - destX;
@@ -264,7 +265,7 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
         if (destY + render_h > HEIGHT) {
             render_h = HEIGHT - destY;
         }
-        
+
         // Handle partial MCU blocks at edges
         if (render_w != mcu_w || render_h != mcu_h) {
             // Edge block - extract only valid pixels to avoid padding artifacts
@@ -276,7 +277,7 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
                     tempBuffer[row * render_w + col] = directRender ? ((pixel >> 8) | (pixel << 8)) : pixel;
                 }
             }
-            
+
             if (directRender) {
                 amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
             } else {
@@ -294,15 +295,15 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
             }
         }
     }
-    
+
     uint32_t t4 = millis();
-    
+
     if (!directRender) {
         amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
     }
-    
+
     uint32_t t5 = millis();
-    
+
     Serial.printf("Mono Timing: Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
                   t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
 }
@@ -455,7 +456,7 @@ void setupWebServer() {
         json += "}";
         request->send(200, "application/json", json);
     });
-    
+
     // Redirect to the HTTPS-hosted copy of this page on GitHub Pages. getDisplayMedia()/
     // getUserMedia() require a "secure context" - plain http:// on a LAN address or
     // mDNS hostname doesn't qualify (only literal localhost/127.0.0.1 do), so serving
@@ -473,9 +474,9 @@ void setupWebServer() {
         Serial.println("Test endpoint hit!");
         request->send(200, "text/plain", "ESP32 server is working!");
     });
-    
+
     // WebSocket event handler - MUCH faster than HTTP POST!
-    ws.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client, 
+    ws.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client,
                    AwsEventType type, void *arg, uint8_t *data, size_t len) {
         if (type == WS_EVT_CONNECT) {
             Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
@@ -489,24 +490,24 @@ void setupWebServer() {
             }
         } else if (type == WS_EVT_DATA) {
             AwsFrameInfo *info = (AwsFrameInfo*)arg;
-            
+
             Serial.printf("WS Data: final=%d, index=%u, len=%u, total=%u, opcode=%d\n",
                          info->final, info->index, len, info->len, info->opcode);
-            
+
             // Only handle binary frames (JPEG images)
             if (info->opcode == WS_BINARY || info->opcode == WS_CONTINUATION) {
-                
+
                 // First chunk of new frame
                 if (info->index == 0) {
                     wsExpectedSize = info->len;
                     wsAssemblySize = 0;
-                    
+
                     // Free old buffer
                     if (wsAssemblyBuffer) {
                         free(wsAssemblyBuffer);
                         wsAssemblyBuffer = nullptr;
                     }
-                    
+
                     // Allocate buffer for complete frame
                     wsAssemblyBuffer = (uint8_t*)malloc(wsExpectedSize);
                     if (!wsAssemblyBuffer) {
@@ -515,34 +516,34 @@ void setupWebServer() {
                     }
                     Serial.printf("Allocated %u bytes for frame assembly\n", wsExpectedSize);
                 }
-                
+
                 // Copy chunk to assembly buffer
                 if (wsAssemblyBuffer && (wsAssemblySize + len <= wsExpectedSize)) {
                     memcpy(wsAssemblyBuffer + wsAssemblySize, data, len);
                     wsAssemblySize += len;
                     Serial.printf("Copied %u bytes, total: %u/%u\n", len, wsAssemblySize, wsExpectedSize);
                 }
-                
+
                 // Check if frame is complete
                 if (info->final && wsAssemblySize == wsExpectedSize) {
                     Serial.printf("Complete frame assembled: %u bytes\n", wsAssemblySize);
-                    
+
                     // Try to transfer to display buffer
                     if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
                         // Free old display buffer
                         if (frameBuffer) {
                             free((void*)frameBuffer);
                         }
-                        
+
                         // Transfer ownership
                         frameBuffer = (volatile uint8_t*)wsAssemblyBuffer;
                         frameSize = wsAssemblySize;
                         newFrameAvailable = true;
-                        
+
                         // Clear assembly buffer pointer (ownership transferred)
                         wsAssemblyBuffer = nullptr;
                         wsAssemblySize = 0;
-                        
+
                         Serial.println("Frame buffered successfully!");
                         xSemaphoreGive(frameMutex);
                     } else {
@@ -557,12 +558,12 @@ void setupWebServer() {
             }
         }
     });
-    
+
     // Add WebSocket to server
     server.addHandler(&ws);
-    
+
     // Monochrome WebSocket handler - for faster grayscale streaming
-    wsMono.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client, 
+    wsMono.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client,
                        AwsEventType type, void *arg, uint8_t *data, size_t len) {
         if (type == WS_EVT_CONNECT) {
             Serial.printf("Mono WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
@@ -575,21 +576,21 @@ void setupWebServer() {
             }
         } else if (type == WS_EVT_DATA) {
             AwsFrameInfo *info = (AwsFrameInfo*)arg;
-            
+
             Serial.printf("Mono WS Data: final=%d, index=%u, len=%u, total=%u\n",
                          info->final, info->index, len, info->len);
-            
+
             if (info->opcode == WS_BINARY || info->opcode == WS_CONTINUATION) {
-                
+
                 if (info->index == 0) {
                     wsMonoExpectedSize = info->len;
                     wsMonoAssemblySize = 0;
-                    
+
                     if (wsMonoAssemblyBuffer) {
                         free(wsMonoAssemblyBuffer);
                         wsMonoAssemblyBuffer = nullptr;
                     }
-                    
+
                     wsMonoAssemblyBuffer = (uint8_t*)malloc(wsMonoExpectedSize);
                     if (!wsMonoAssemblyBuffer) {
                         Serial.printf("Mono malloc failed for %u bytes!\n", wsMonoExpectedSize);
@@ -597,28 +598,28 @@ void setupWebServer() {
                     }
                     Serial.printf("Mono allocated %u bytes\n", wsMonoExpectedSize);
                 }
-                
+
                 if (wsMonoAssemblyBuffer && (wsMonoAssemblySize + len <= wsMonoExpectedSize)) {
                     memcpy(wsMonoAssemblyBuffer + wsMonoAssemblySize, data, len);
                     wsMonoAssemblySize += len;
                 }
-                
+
                 if (info->final && wsMonoAssemblySize == wsMonoExpectedSize) {
                     Serial.printf("Mono frame complete: %u bytes\n", wsMonoAssemblySize);
-                    
+
                     if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
                         if (frameBuffer) {
                             free((void*)frameBuffer);
                         }
-                        
+
                         frameBuffer = (volatile uint8_t*)wsMonoAssemblyBuffer;
                         frameSize = wsMonoAssemblySize;
                         newFrameAvailable = true;
                         isMonochrome = true;  // Mark as monochrome
-                        
+
                         wsMonoAssemblyBuffer = nullptr;
                         wsMonoAssemblySize = 0;
-                        
+
                         Serial.println("Mono frame buffered!");
                         xSemaphoreGive(frameMutex);
                     } else {
@@ -631,37 +632,37 @@ void setupWebServer() {
             }
         }
     });
-    
+
     server.addHandler(&wsMono);
 
-    
+
     server.begin();
     Serial.println("Web server started");
 }
 
 void setup()
 {
-    
+
     Serial.begin(115200);
     Serial.println("Starting webJPEG display...");
 
     delay(3000);
-    
+
     // Initialize display
     if (!amoled.begin()) {
         while (1) {
-            Serial.println("Display init failed!"); 
+            Serial.println("Display init failed!");
             delay(1000);
         }
     }
-    
+
     // Create sprite
     spr.createSprite(WIDTH, HEIGHT);
     spr.setSwapBytes(true);
-    
+
     // Create mutex for frame buffer
     frameMutex = xSemaphoreCreateMutex();
-    
+
     // Show startup screen
     spr.fillSprite(TFT_BLACK);
     spr.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -671,10 +672,10 @@ void setup()
     spr.setTextDatum(TL_DATUM);
     amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
     delay(1000);
-    
+
     // Connect to WiFi
     setupWiFi();
-    
+
     // Start web server
     if (WiFi.status() == WL_CONNECTED) {
         setupWebServer();
@@ -684,43 +685,43 @@ void setup()
 void loop()
 {
     static unsigned long lastCheck = 0;
-    
+
     // Check for new frames
     if (newFrameAvailable) {
         uint32_t startTime = millis();
-        
+
         // Take mutex with minimal blocking
         if (xSemaphoreTake(frameMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-            
+
             if (frameBuffer && frameSize > 0) {
                 // Cast away volatile for function call
                 uint8_t* bufPtr = (uint8_t*)frameBuffer;
                 size_t bufSize = frameSize;
                 bool isMono = isMonochrome;
-                
+
                 // Draw JPEG to display (color or monochrome)
                 if (isMono) {
                     drawMonoJPEG(bufPtr, bufSize);
                 } else {
                     drawJPEG(bufPtr, bufSize);
                 }
-                
+
                 // Track performance
                 frameCount++;
                 lastFrameTime = millis() - startTime;
-                
+
                 // Free the buffer immediately
                 free(bufPtr);
                 frameBuffer = nullptr;
                 frameSize = 0;
                 isMonochrome = false;
             }
-            
+
             newFrameAvailable = false;
             xSemaphoreGive(frameMutex);
         }
     }
-    
+
     // Periodic status update with FPS info
     unsigned long now = millis();
     if (now - lastCheck > 30000) {  // Every 30 seconds
@@ -729,7 +730,7 @@ void loop()
         }
         lastCheck = now;
     }
-    
+
     // Minimal delay - let other tasks run
     vTaskDelay(1);  // More efficient than delay()
 }
