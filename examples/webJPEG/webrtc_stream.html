@@ -184,7 +184,7 @@
                 <li>Make sure your ESP32 is connected to WiFi</li>
                 <li>ESP32 should be accessible at <code>esp-webjpeg.local</code> unless you set a different mDNS hostname when flashing</li>
                 <li>Display size auto-detects from the board - override the dropdown manually if it's wrong or unreachable</li>
-                <li>Video is automatically cropped and scaled to fill the display without distortion</li>
+                <li>Video is automatically scaled to match display dimensions</li>
                 <li>Choose between webcam or screen capture</li>
                 <li>Screen share works in Chrome, Edge, and Firefox</li>
                 <li>Lower frame rate or quality if stream is laggy</li>
@@ -252,29 +252,6 @@
                 const [width, height] = sizeValue.split('x').map(Number);
                 return { width, height };
             }
-        }
-
-        // Draws the video frame into the canvas using "object-fit: cover" - crops the
-        // source to the canvas's aspect ratio (centered), then scales that crop to fill
-        // the canvas exactly. Avoids the stretch-distortion a naive full-frame draw
-        // would cause whenever the capture's aspect ratio doesn't match the display's.
-        function drawVideoCover(video, canvas, ctx) {
-            const vw = video.videoWidth, vh = video.videoHeight;
-            const targetAspect = canvas.width / canvas.height;
-            const sourceAspect = vw / vh;
-            let sx, sy, sWidth, sHeight;
-            if (sourceAspect > targetAspect) {
-                sHeight = vh;
-                sWidth = vh * targetAspect;
-                sx = (vw - sWidth) / 2;
-                sy = 0;
-            } else {
-                sWidth = vw;
-                sHeight = vw / targetAspect;
-                sx = 0;
-                sy = (vh - sHeight) / 2;
-            }
-            ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height);
         }
 
         function updateStatus(message, type) {
@@ -398,8 +375,8 @@
                     // Request screen capture. `ideal` is only a hint the OS/browser is
                     // free to ignore (common for "Entire Screen"/"Window" sources), but
                     // asking for close to the actual target avoids over-capturing when
-                    // it IS honored (e.g. Chrome's tab-capture surface) - the cover-fit
-                    // draw below makes the output correct either way.
+                    // it IS honored (e.g. Chrome's tab-capture surface) - the canvas
+                    // draw below still forces the exact output size either way.
                     updateStatus('🖥️ Requesting screen share...', 'info');
                     const displayDims = getDisplayDimensions();
                     stream = await navigator.mediaDevices.getDisplayMedia({
@@ -507,8 +484,8 @@
                 canvas.width = displayDims.width;
                 canvas.height = displayDims.height;
 
-                // Draw current video frame to canvas, cropped/scaled to fill it exactly
-                drawVideoCover(video, canvas, ctx);
+                // Draw current video frame to canvas (scaled to display size)
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                 
                 // Convert to grayscale if monochrome mode
                 if (isMono) {

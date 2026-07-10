@@ -7,15 +7,24 @@ on:
     paths:
       - "examples/**"
       - "src/**"
+      - "boards/**"
       - "platformio.ini"
+      - "CMakeLists.txt"
+      - "sdkconfig.defaults"
+      - "partitions.*.csv"
       - ".github/workflows/platformio.yml"
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      # env must match the PlatformIO environment that builds that example
+      # (see platformio.ini).
       matrix:
-        examples:
-          - examples/webJPEG
+        include:
+          - example: examples/webJPEG
+            env: webJPEG
+          - example: examples/webH264
+            env: webH264
 
     steps:
       - uses: actions/checkout@v3
@@ -24,7 +33,7 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio/.cache
-          key: ${{ runner.os }}-pio
+          key: ${{ runner.os }}-pio-${{ matrix.env }}
       - uses: actions/setup-python@v4
         with:
           python-version: "3.9"
@@ -33,5 +42,5 @@ jobs:
 
       - name: Run PlatformIO
         run: |
-          export PLATFORMIO_SRC_DIR=${{ matrix.examples }}
-          pio run
+          export PLATFORMIO_SRC_DIR=${{ matrix.example }}
+          pio run -e ${{ matrix.env }}

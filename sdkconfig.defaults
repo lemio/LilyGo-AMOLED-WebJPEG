@@ -1,0 +1,17 @@
+# Boots straight into the Arduino setup()/loop() entry point instead of app_main()
+CONFIG_AUTOSTART_ARDUINO=y
+CONFIG_FREERTOS_HZ=1000
+
+# ESP32-S3R8 on-package octal PSRAM (T4-S3)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+
+# 16MB flash, custom partition table with a roomy app slot for WiFi + esp_h264 + display libs
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.webH264.csv"
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

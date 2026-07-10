@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ESP32 Display Streaming</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; max-width: 32rem; }
+  label { display: block; margin-top: 1rem; font-size: 0.9rem; }
+  input[type="text"], input[type="number"], select { padding: 0.4rem; width: 100%; box-sizing: border-box; }
+  label.checkbox { display: flex; align-items: center; gap: 0.5rem; }
+  label.checkbox input { width: auto; }
+  button { padding: 0.5rem 1rem; margin-top: 1rem; margin-right: 0.5rem; }
+  #status { margin-top: 1rem; color: #555; white-space: pre-line; }
+  p.note { font-size: 0.85rem; color: #777; }
+</style>
+</head>
+<body>
+<h1>Screen &rarr; LilyGo T4-S3 AMOLED</h1>
+<p>Captures your screen, encodes it as H.264 in the browser (WebCodecs), and
+streams it over a WebSocket to the ESP32, which decodes it and pushes it to
+the display.</p>
+
+<p class="note">
+Run this page from a secure context (e.g. <code>python3 -m http.server</code>
+on your machine and open <code>http://localhost:8000/h264_stream.html</code>) &mdash;
+Chrome only allows screen capture from https:// or http://localhost, not from
+a plain http:// LAN address or a file:// URL.
+</p>
+
+<p class="note">Open the browser console (F12) for detailed per-frame logs.</p>
+
+<label for="host">ESP32 address (host or host:port, printed on its serial console)</label>
+<input id="host" type="text" placeholder="192.168.1.42" value="">
+
+<label for="fpsInput">Capture FPS (the device only absorbs ~3-5fps at full resolution; requesting more just wastes capture work unless acks are ignored)</label>
+<input id="fpsInput" type="number" min="1" max="60" value="5">
+
+<label for="maxInFlightSelect">Frames in flight (ignored if "ignore acks" is checked)</label>
+<select id="maxInFlightSelect">
+  <option value="1" selected>1 - lowest latency, one frame at a time</option>
+  <option value="2">2 - pipelined: a frame can be sent while the previous one is still being processed, which can raise throughput a bit at the cost of a bit more latency</option>
+</select>
+
+<label class="checkbox"><input type="checkbox" id="ignoreAcksCheckbox">
+Ignore device acks (no flow control at all, like before the ack protocol existed) - captures/sends at the full requested FPS regardless of whether the device has caught up, so motion looks smoother but latency grows unbounded the longer you stream</label>
+
+<div>
+  <button id="startBtn">Start streaming</button>
+  <button id="stopBtn" disabled>Stop</button>
+</div>
+<div id="status">Disconnected</div>
+
+<script>
+const WIDTH = 600;
+const HEIGHT = 450;
+const KEYFRAME_INTERVAL_MS = 2000;
+
+// The ESP32's software H.264 decoder is far slower than typical capture
+// frame rates (full-panel decode + push measures ~200-400ms/frame on real
+// content - a processing floor, not something pacing can hide), and it does
+// all its work synchronously in the WebSocket receive handler with no queue
+// of its own. Without pacing, the browser would just keep sending and frames
+// would back up on the device forever (unbounded, ever-growing lag). Instead
+// we keep at most maxInFlight frames "in flight" at a time: the ESP32 sends
+// a tiny ack back after it finishes processing each message, and we don't
+// encode/send another frame once that many are outstanding. Any captured
+// frame that shows up while we're still full is simply dropped (never
+// encoded), which is what naturally turns into "the effective frame rate
+// matches whatever the device can actually keep up with" without either
+// side tracking rates explicitly. The "ignore acks" checkbox disables all of
+// this and goes back to sending everything unconditionally.
+
+// Not a pacing knob - TCP guarantees an ack isn't silently lost, so this
+// only protects against a genuinely stuck/crashed device: without it, a
+// missing ack could wedge the in-flight window shut forever.
+const STALL_TIMEOUT_MS = 3000;
+
+// DOM writes are surprisingly expensive (they can force a style/layout
+// recalculation) and dropped frames can happen at native capture rate
+// (every ~16-50ms). Updating the status line on every single frame was a
+// real suspect for slowing the read loop down enough to let the browser's
+// own capture queue build a backlog - which would then drain in a visible
+// burst of stale frames. Stats are now only ever written to the DOM on this
+// timer, never from inside the hot per-frame path.
+const STATS_UPDATE_INTERVAL_MS = 250;
+
+let mediaStream = null;
+let encoder = null;
+let ws = null;
+let ignoreAcks = false;
+let maxInFlight = 1;
+// FIFO of { sentAt } for frames sent but not yet acked. Only used when
+// ignoreAcks is false. Acks arrive in the same order frames were sent
+// (single TCP stream, processed synchronously on the device), so shifting
+// the oldest entry off on each ack is always correct.
+let inFlight = [];
+let lastEncodeStart = 0;
+let lastKeyframeAt = 0;
+let sentCount = 0;
+let droppedCount = 0;
+let ackCount = 0;
+let statsTimer = null;
+let streamStartTime = 0;
+let lastFrameTimestamp = null;
+let lastReadWallTime = null;
+
+const statusEl = document.getElementById('status');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const hostEl = document.getElementById('host');
+const fpsInput = document.getElementById('fpsInput');
+const maxInFlightSelect = document.getElementById('maxInFlightSelect');
+const ignoreAcksCheckbox = document.getElementById('ignoreAcksCheckbox');
+const configInputs = [hostEl, fpsInput, maxInFlightSelect, ignoreAcksCheckbox];
+
+function log(...args) {
+  const t = streamStartTime ? (performance.now() - streamStartTime).toFixed(1) : '0.0';
+  console.log(`[stream +${t}ms]`, ...args);
+}
+
+function setStatus(text) {
+  statusEl.textContent = text;
+}
+
+function updateStats() {
+  const mode = ignoreAcks ? 'acks ignored' : `inFlight=${inFlight.length}/${maxInFlight}`;
+  setStatus(`Streaming (${mode})... sent ${sentCount}, dropped ${droppedCount}, acked ${ackCount}`);
+}
+
+function connect() {
+  const host = hostEl.value.trim();
+  if (!host) {
+    setStatus('Enter the ESP32 address first.');
+    return;
+  }
+
+  log('connecting to', host);
+  ws = new WebSocket(`ws://${host}/video-stream`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    log('WS open');
+    setStatus('Connected, starting capture...');
+    startCapture();
+  };
+  ws.onclose = (evt) => {
+    log('WS closed, code=', evt.code, 'reason=', evt.reason || '(none)', 'wasClean=', evt.wasClean);
+    setStatus('Disconnected');
+    stopStreaming();
+  };
+  ws.onerror = (err) => {
+    log('WS error', err);
+    console.error('WebSocket error:', err);
+  };
+  // Any message from the device is an ack that it's ready for another frame.
+  ws.onmessage = (evt) => {
+    ackCount++;
+    if (ignoreAcks) {
+      log(`ack #${ackCount} received but ignored (ignoreAcks mode)`);
+      return;
+    }
+    if (inFlight.length === 0) {
+      log(`ack #${ackCount} WARN: nothing was in flight (stray/duplicate ack, or its stall timeout already fired)`);
+      return;
+    }
+    const entry = inFlight.shift();
+    const rtt = performance.now() - entry.sentAt;
+    log(`ack #${ackCount} rtt=${rtt.toFixed(1)}ms data=${JSON.stringify(evt.data)} inFlight now=${inFlight.length}/${maxInFlight}`);
+  };
+}
+
+async function startCapture() {
+  try {
+    const fps = Math.max(1, parseInt(fpsInput.value, 10) || 5);
+    ignoreAcks = ignoreAcksCheckbox.checked;
+    maxInFlight = Math.max(1, parseInt(maxInFlightSelect.value, 10) || 1);
+
+    mediaStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { width: { ideal: WIDTH }, height: { ideal: HEIGHT }, frameRate: { ideal: fps } },
+      audio: false
+    });
+
+    const [videoTrack] = mediaStream.getVideoTracks();
+    log('capture started, track settings:', JSON.stringify(videoTrack.getSettings()));
+    videoTrack.onended = () => { log('capture track ended'); stopStreaming(); };
+
+    const trackProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+    const reader = trackProcessor.readable.getReader();
+
+    encoder = new VideoEncoder({
+      output: (chunk) => {
+        const now = performance.now();
+        log(`encoder output: type=${chunk.type} size=${chunk.byteLength}B encodeLatency=${(now - lastEncodeStart).toFixed(1)}ms`);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const buffer = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(buffer);
+          ws.send(buffer);
+          log(`ws.send ${buffer.byteLength}B`);
+        } else {
+          log('WARN: encoder produced output but ws is not open - this frame is LOST' +
+              (ignoreAcks ? '' : ' and its in-flight slot will stay held until the stall timeout fires'));
+        }
+      },
+      error: (e) => {
+        log('encoder error', e);
+        console.error('Encoder error:', e);
+      }
+    });
+
+    // width/height here must match H264_DECODE_MAX_WIDTH/HEIGHT and the
+    // DISPLAY_WIDTH/HEIGHT checks in webH264.cpp.
+    encoder.configure({
+      codec: 'avc1.42E01E',   // H.264 constrained baseline, the profile the
+                               // ESP32 SW decoder supports
+      width: WIDTH,
+      height: HEIGHT,
+      bitrate: 700_000,
+      bitrateMode: 'constant',
+      latencyMode: 'realtime',
+      avc: { format: 'annexb' }
+    });
+
+    streamStartTime = performance.now();
+    lastKeyframeAt = 0;
+    sentCount = 0;
+    droppedCount = 0;
+    ackCount = 0;
+    inFlight = [];
+    lastFrameTimestamp = null;
+    lastReadWallTime = null;
+    if (statsTimer) clearInterval(statsTimer);
+    statsTimer = setInterval(updateStats, STATS_UPDATE_INTERVAL_MS);
+    setStatus('Streaming...');
+    configInputs.forEach((el) => { el.disabled = true; });
+    log(`config: ${WIDTH}x${HEIGHT} @ requested ${fps}fps, keyframe every ${KEYFRAME_INTERVAL_MS}ms, ` +
+        `ignoreAcks=${ignoreAcks}, maxInFlight=${maxInFlight}, stall timeout ${STALL_TIMEOUT_MS}ms`);
+    readFrames(reader);
+  } catch (err) {
+    console.error('Failed to start capture:', err);
+    setStatus('Failed to start: ' + err.message);
+    stopStreaming();
+  }
+}
+
+async function readFrames(reader) {
+  while (mediaStream && mediaStream.active && encoder && encoder.state === 'configured') {
+    const { done, value } = await reader.read();
+    if (done) {
+      log('reader: stream ended');
+      break;
+    }
+
+    const now = performance.now();
+
+    // Diagnostic: compares how much the frame's own capture timestamp
+    // advanced against how much wall-clock time actually passed. If these
+    // stay roughly equal even while we're dropping frames, the browser is
+    // handing us fresh frames as expected. If frame.timestamp advances much
+    // more slowly than wall time (or read() calls stop taking any real
+    // time at all), we're draining a backlog of stale buffered frames
+    // instead - that's the "old frames before the new one" bug to watch for.
+    if (lastFrameTimestamp !== null) {
+      const frameDeltaMs = (value.timestamp - lastFrameTimestamp) / 1000;
+      const wallDeltaMs = now - lastReadWallTime;
+      log(`read: frameTs+${frameDeltaMs.toFixed(1)}ms wall+${wallDeltaMs.toFixed(1)}ms${Math.abs(frameDeltaMs - wallDeltaMs) > 30 ? '  <-- MISMATCH, possible backlog' : ''}`);
+    }
+    lastFrameTimestamp = value.timestamp;
+    lastReadWallTime = now;
+
+    if (!ignoreAcks) {
+      // A missing ack shouldn't wedge the window shut forever - give up on
+      // in-flight entries that have been outstanding too long.
+      while (inFlight.length && now - inFlight[0].sentAt >= STALL_TIMEOUT_MS) {
+        log(`WARN: stall timeout exceeded for frame sent at +${(inFlight[0].sentAt - streamStartTime).toFixed(1)}ms; giving up on its ack`);
+        inFlight.shift();
+      }
+      if (inFlight.length >= maxInFlight) {
+        droppedCount++;
+        log(`DROP (inFlight=${inFlight.length}/${maxInFlight}) total dropped=${droppedCount}`);
+        value.close();
+        continue;
+      }
+    }
+
+    const isKeyFrame = (now - lastKeyframeAt >= KEYFRAME_INTERVAL_MS);
+    if (isKeyFrame) lastKeyframeAt = now;
+
+    if (!ignoreAcks) {
+      inFlight.push({ sentAt: now });
+    }
+    lastEncodeStart = now;
+    log(`ENCODE frame #${sentCount + 1} keyFrame=${isKeyFrame}` +
+        (ignoreAcks ? ' (acks ignored)' : ` inFlight=${inFlight.length}/${maxInFlight}`));
+    encoder.encode(value, { keyFrame: isKeyFrame });
+    value.close();
+    sentCount++;
+  }
+  log('readFrames loop exited');
+}
+
+function stopStreaming() {
+  log('stopStreaming');
+  if (statsTimer) {
+    clearInterval(statsTimer);
+    statsTimer = null;
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+  }
+  if (encoder && encoder.state !== 'closed') {
+    encoder.close();
+  }
+  encoder = null;
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  inFlight = [];
+  configInputs.forEach((el) => { el.disabled = false; });
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+startBtn.addEventListener('click', () => {
+  if (!('MediaStreamTrackProcessor' in window) || !('VideoEncoder' in window)) {
+    setStatus('This browser lacks WebCodecs / Insertable Streams support (use a recent Chrome or Edge).');
+    return;
+  }
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  connect();
+});
+
+stopBtn.addEventListener('click', stopStreaming);
+</script>
+</body>
+</html>

@@ -73,8 +73,9 @@ issue with your board model and a serial log from boot.
 3. The Display Size dropdown auto-detects your board's resolution (via `/boardinfo`) -
    override it manually if detection fails or you're pointing at a different board.
    Pick a source (webcam or screen share), then "▶️ Start Streaming" and grant the
-   permission prompt. Whatever you capture is automatically cropped and scaled to fill
-   the display exactly, with no manual pre-resizing (e.g. via devtools) needed.
+   permission prompt. Whatever you capture is stretched to fill the display exactly -
+   if its aspect ratio doesn't match, resize your browser window/tab beforehand (e.g.
+   via devtools) to avoid distortion.
 
 ### Why the redirect
 
