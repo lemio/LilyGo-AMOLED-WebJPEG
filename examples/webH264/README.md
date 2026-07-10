@@ -7,37 +7,62 @@ using the [WebCodecs API](https://developer.mozilla.org/en-US/docs/Web/API/WebCo
 decodes it with Espressif's [esp_h264](https://github.com/espressif/esp-h264-component)
 (tinyh264) software decoder and pushes the result straight to the display.
 
-This is the same idea as the sibling [webJPEG](../webJPEG) example, but a different
-codec tradeoff: H.264 compresses far better than MJPEG for the same visual quality
-(lower bandwidth, and the decoder itself is what's slow here, not the network), at the
-cost of a much heavier on-device decoder and a more involved build (see "Why this needs
-its own env" below). Compare the two if you're unsure which fits your use case.
+This is the sibling of [webJPEG](../webJPEG) - see the root [README](../../README.md)
+for how the two compare and which one to pick. Both share the same streaming page
+([stream.html](../stream.html)) and the same on-device WiFi setup flow.
+
+**Inspiration:** using a real video codec instead of MJPEG for this kind of streaming
+was prompted by [easymcucourse/esp32base's L029_h264](https://github.com/easymcucourse/esp32base/tree/main/L029_h264)
+example and its [accompanying video](https://www.youtube.com/watch?v=knCc9FmSXms) -
+also an ESP32-S3 + `esp_h264` software decoder. Its demo runs much faster than this
+example does (see "Why this is slower than other esp_h264 demos" below) because it
+decodes at a much smaller resolution, not because it does anything fundamentally
+different.
 
 **T4-S3 only.** Unlike webJPEG's auto-detect-any-panel support, both ends of this
 stream hardcode the resolution (600x450, the T4-S3/RM690B0 panel's native size) - the
 browser's `VideoEncoder` is configured for it and the on-device decode buffers are sized
 for it. It won't run correctly on the 1.47"/1.91" boards without changing those
-constants (`WIDTH`/`HEIGHT` in [h264_stream.html](./h264_stream.html),
+constants (`H264_WIDTH`/`H264_HEIGHT` in [stream.html](../stream.html),
 `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` in [webH264.cpp](./webH264.cpp), and
 `H264_DECODE_MAX_WIDTH`/`H264_DECODE_MAX_HEIGHT` in [h264_decode.h](./h264_decode.h)).
 
-## Flashing with PlatformIO
+## Flashing
 
-```bash
-pio run -e webH264 --target upload
-```
+See the root [README](../../README.md#flashing) for the browser flasher (no PlatformIO
+install needed) and the PlatformIO command-line steps. This example's PlatformIO
+environment name is `webH264`.
 
-(There's no browser-flasher/GitHub Pages build for this example yet - unlike webJPEG,
-publishing it that way would need changes to the
-[lemio/ESP32-S3-Flasher](https://github.com/lemio/ESP32-S3-Flasher) action to support
-more than one firmware per repo.)
+## Using it
 
-Before compiling, edit the placeholder values in [webH264.cpp](./webH264.cpp):
+1. Flash the firmware and open the Serial Monitor - it prints the assigned IP address,
+   and the display itself shows a connection spinner, then the IP address and mDNS
+   hostname once WiFi connects (see the root README's "Setup flow" section - this is
+   identical to webJPEG's).
+2. Visit `http://<that address>` (or `http://esp-webh264.local`, unless you set a
+   different mDNS hostname). The board doesn't serve the streaming page itself - it
+   302-redirects you to the HTTPS copy of [stream.html](../stream.html) hosted on GitHub
+   Pages, pre-filling the `espAddress` field with the board's address and detecting that
+   this is a webH264 board. See the root README's "Why the redirect" section for why,
+   and the one manual step it requires (allowing "insecure content" once per browser).
+3. Optionally adjust the capture FPS / frames-in-flight / ignore-acks controls (see
+   "Flow control" below), and click "▶️ Start Streaming". Open the browser console (F12)
+   for detailed per-frame logs.
 
-```cpp
-const char ssid[100] = "|*S*|";     // replace with your WiFi SSID
-const char password[100] = "|*P*|"; // replace with your WiFi password
-```
+## Options in stream.html
+
+Once [stream.html](../stream.html) detects a webH264 board (or you force "Mode: Force
+WebH264"), it shows:
+
+- **Resolution** - fixed at 600x450, not user-editable (see "T4-S3 only" above).
+- **Capture FPS** - how fast the browser asks the OS to capture frames.
+- **Frames in flight** - how many un-acked frames the browser allows outstanding at
+  once (see "Flow control" below).
+- **Ignore device acks** - disables flow control entirely.
+
+`stream.html` also accepts URL query parameters for bookmarking a specific setup:
+`espAddress`, `mode=h264`, `h264Fps` (1-60), `maxInFlight` (`1`/`2`), `ignoreAcks`
+(`true`/`false`).
 
 ## Why this needs its own env
 
@@ -49,32 +74,19 @@ builds Arduino as a component of a real ESP-IDF/CMake project
 (`framework = arduino, espidf`), which is why this example alone needs:
 
 - [webH264.cpp](./webH264.cpp), not `.ino` - the `.ino` preprocessor (auto function
-  prototypes, implicit `Arduino.h`) is a plain-Arduino/SCons-only feature.
-- [CMakeLists.txt](./CMakeLists.txt) and [idf_component.yml](./idf_component.yml) here,
-  plus a project-root [CMakeLists.txt](../../CMakeLists.txt),
+  prototypes, implicit `Arduino.h`) is a plain-Arduino/SCons-only feature, and doesn't
+  apply under this builder either way.
+- [idf_component.yml](../idf_component.yml) (at the shared `examples/` root, alongside
+  [CMakeLists.txt](../CMakeLists.txt), which explicitly lists this example's source
+  files since the ESP-IDF/CMake builder ignores PlatformIO's `build_src_filter`), plus a
+  project-root [CMakeLists.txt](../../CMakeLists.txt),
   [sdkconfig.defaults](../../sdkconfig.defaults), and
   [partitions.webH264.csv](../../partitions.webH264.csv) - all required by the ESP-IDF
-  CMake build, none of which the plain-Arduino examples need.
+  CMake build, none of which the plain-Arduino `webJPEG` example needs.
 - Its own minimal `lib_deps` in `[env:webH264]` rather than inheriting the shared
-  `[env]` list - deliberately excludes dependencies (lvgl, JPEGDecoder, TinyGPSPlus,
-  etc.) other examples need but this one doesn't, since untested libraries under this
-  less common framework combination are a real build risk, not just dead weight.
-
-## Using it
-
-1. Flash the firmware (see above) and open the Serial Monitor - it prints the assigned
-   IP address, and the display itself shows "Connecting to WiFi", then that address
-   (as a `ws://` URL) once connected.
-2. Open [h264_stream.html](./h264_stream.html) from a **secure context** - e.g. run
-   `python3 -m http.server` in this folder and open `http://localhost:8000/h264_stream.html`.
-   Unlike webJPEG, this page isn't hosted anywhere over HTTPS yet, so a plain
-   `file://` open or a LAN `http://` address won't work: `getDisplayMedia()` requires
-   HTTPS or `localhost`/`127.0.0.1` specifically. See webJPEG's README ("Why the
-   redirect") for the full explanation of this browser restriction.
-3. Enter the board's address from step 1 into the "ESP32 address" field, optionally
-   adjust the capture FPS / frames-in-flight / ignore-acks controls (see "Flow control"
-   below), and click "Start streaming". Open the browser console (F12) for detailed
-   per-frame logs.
+  `[env]` list - deliberately excludes dependencies (JPEGDecoder, TinyGPSPlus, etc.)
+  other examples need but this one doesn't, since untested libraries under this less
+  common framework combination are a real build risk, not just dead weight.
 
 ## Flow control
 
@@ -101,6 +113,27 @@ frame, and the browser uses that as a pacing signal:
   useful to raise past that once ack-ignoring, since capture then determines the send
   rate directly.
 
+## Why this is slower than other esp_h264 demos
+
+[easymcucourse/esp32base's L029_h264](https://github.com/easymcucourse/esp32base/tree/main/L029_h264)
+(the demo that inspired this example - see "Inspiration" above) plays video smoothly at
+a much higher frame rate than the ~3-5fps here, despite using the same chip
+(ESP32-S3) and the same software decoder (`esp_h264`/tinyh264). The difference isn't a
+smarter decoder or hardware acceleration (ESP32-S3 has no H.264 hardware decode block -
+only ESP32-P4 does) - it's resolution. That demo decodes at 160x128 (20,480 pixels);
+this example decodes at 600x450 (270,000 pixels) to fill the T4-S3's full panel - about
+13x more pixels. Software H.264 decode cost scales roughly with pixel/macroblock count,
+which lines up with what this example's own per-frame timing shows: ~190-280ms decode
+at 600x450 versus an expected ~15-20ms at 160x128, the same order of magnitude as that
+demo's much higher frame rate. Their encoder settings (baseline profile, level 3.0, no
+B-frames, CAVLC not CABAC) are also essentially what this example already uses -
+`avc1.42E01E` in [stream.html](../stream.html) is Baseline/Level 3.0, and Baseline
+profile mandates no B-frames/CAVLC anyway.
+
+If you want higher frame rate here at the cost of a smaller/upscaled image, lowering the
+resolution (see the constants listed under "T4-S3 only" above) is the lever that
+actually matters - decoder tuning has comparatively little effect.
+
 ## Troubleshooting
 
 - **Nothing shows on the display / "Streaming..." status but no image:** open the
@@ -110,14 +143,20 @@ frame, and the browser uses that as a pacing signal:
   frames if it does). If frames are being sent (`ws.send` lines) but the display stays
   blank, check the serial monitor for `Error in decoding` or a crash/reboot.
 - **"WebSocket connection ... failed" in the console:** confirm the board's address is
-  reachable (`ping <address>`) and that `h264_stream.html` is being served from a
-  secure context (see "Using it" above) - Chrome silently fails the WebCodecs setup on
-  an insecure origin without a clear error otherwise.
+  reachable (`ping <address>`) and that you're on the HTTPS `stream.html` (see the root
+  README's "Why the redirect" for the one-time insecure-content exception the WebSocket
+  needs).
 - **Choppy / low frame rate:** expected at this resolution on this decoder - see "Flow
   control" above. Try "2 frames in flight" for a modest throughput increase.
 
 ## Technical notes
 
+- Every received frame logs a per-stage timing breakdown to Serial: `Recv` (network +
+  WebSocket fragment reassembly), `Decode` (`h264_decode_parse()` - the actual H.264
+  decode and YUV->RGB565 conversion together, see below), `GetFrame` (pulling the
+  decoded buffer out, expected ~0ms), `Push` (`amoled.pushColors()`), `Ack`, and
+  `Total`. Useful for seeing exactly where time goes on real content - see "Why this is
+  slower than other esp_h264 demos" above for what that breakdown typically shows.
 - `h264_decode.c`/`.h` wrap `esp_h264`'s streaming decoder API: `h264_decode_open()`
   once at boot, `h264_decode_reset()` on every new WebSocket connection (feeding a fresh
   SPS/PPS/IDR sequence into an already-active decode session can crash the underlying
@@ -134,3 +173,8 @@ frame, and the browser uses that as a pacing signal:
   priority than the idle task) never yields, and the idle task on that core never runs -
   the task watchdog will fire continuously (harmless by itself, but worth explaining so
   it isn't mistaken for a real hang if you see it in the serial log).
+- `/boardinfo` (JSON: `variant`, `name`, `width`, `height`, `boardId`) is what
+  `stream.html` uses to tell this firmware apart from webJPEG's. Served with
+  `Access-Control-Allow-Origin: *` since the calling page is cross-origin (GitHub Pages,
+  not the device) - safe here since every endpoint is read-only board/status info or the
+  streaming WebSocket, nothing sensitive.

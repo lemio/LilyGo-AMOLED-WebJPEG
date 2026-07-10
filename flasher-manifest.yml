@@ -1,17 +1,17 @@
 # Per-example metadata for the ESP32-S3-Flasher repo's reusable build/publish Action
 # (https://github.com/lemio/ESP32-S3-Flasher). The Action runs a bare `pio run`, which
-# builds platformio.ini's only env (T-Display-AMOLED, also its `default_envs`), then
-# merges this file's name/description/variables into the generated manifest.json
-# alongside that compiled binary. This repo now contains a single project
-# (examples/webJPEG), so this is the only entry under `examples:` below.
+# builds every environment in platformio.ini, then merges this file's per-example
+# name/description/variables into the generated manifest.json alongside each compiled
+# binary - matched up by PlatformIO environment name, so each key under `examples:`
+# below must exactly match an `[env:...]` name in platformio.ini (webJPEG, webH264).
 #
-# `variables[].firmware_name` must match the exact string webJPEG.ino reserves as a
-# fixed-size array (e.g. `const char ssid[100] = "|*S*|";`) - it's the literal text the
-# flasher searches for in the compiled binary. ssid/password have no sensible default
-# (must be patched here, or before compiling); mdnsName's default value is itself both a
-# working hostname AND the flasher's search key, so a board flashed without ever
-# touching the browser flasher still gets a usable http://esp-webjpeg.local.
-# See examples/webJPEG/webJPEG.ino.
+# `variables[].firmware_name` must match the exact string each example's .cpp file
+# reserves as a fixed-size array (e.g. `const char ssid[100] = "|*S*|";`) - it's the
+# literal text the flasher searches for in the compiled binary. ssid/password have no
+# sensible default (must be patched here, or before compiling); webJPEG's mdnsName
+# default value is itself both a working hostname AND the flasher's search key, so a
+# board flashed without ever touching the browser flasher still gets a usable
+# http://esp-webjpeg.local (http://esp-webh264.local for webH264).
 #
 # `site:` (optional, alongside `examples:`) renames the flasher tool itself instead of
 # leaving it as the generic "ESP32-S3 Web Flasher"/"ESP32-S3 Flash Wizard" - see
@@ -19,10 +19,10 @@
 
 site:
   title: LilyGo AMOLED WebJPEG Flasher
-  subtitle: Flash the browser-to-display WebJPEG streamer straight from your browser - no PlatformIO needed
+  subtitle: Flash a browser-to-display video streamer straight from your browser - no PlatformIO needed
 
 examples:
-  T-Display-AMOLED:
+  webJPEG:
     name: WebJPEG Stream Display
     description: >-
       Streams a browser tab, camera, or screen share to the AMOLED display over WiFi as
@@ -41,5 +41,29 @@ examples:
       - firmware_name: esp-webjpeg
         readable_name: mDNS Hostname
         default_value: esp-webjpeg
+        postfix: .local
+        max_length: 100
+
+  webH264:
+    name: WebH264 Stream Display
+    description: >-
+      Streams a browser tab or window to the AMOLED display over WiFi as H.264, encoded
+      in-browser with WebCodecs and decoded on-device. Sharper image and much lower
+      bandwidth than WebJPEG at the same quality, at the cost of a slower decoder
+      (roughly 3-5fps). T4-S3 (2.41", 600x450) only.
+    sourceUrl: https://github.com/lemio/LilyGo-AMOLED-WebJPEG/tree/main/examples/webH264
+    hardware: T4-S3
+    variables:
+      - firmware_name: "|*S*|"
+        readable_name: WiFi Name (SSID)
+        default_value: ""
+        max_length: 100
+      - firmware_name: "|*P*|"
+        readable_name: WiFi Password
+        default_value: ""
+        max_length: 100
+      - firmware_name: esp-webh264
+        readable_name: mDNS Hostname
+        default_value: esp-webh264
         postfix: .local
         max_length: 100

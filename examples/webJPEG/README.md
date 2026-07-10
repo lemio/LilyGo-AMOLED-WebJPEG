@@ -6,36 +6,15 @@ The browser captures video with `getDisplayMedia`/`getUserMedia`, draws each fra
 decodes each JPEG and pushes it straight to the display. (This is not the WebRTC
 protocol - no `RTCPeerConnection`/SDP/ICE - despite the repo's history using that name.)
 
-## Flashing prebuilt firmware
+This is the sibling of [webH264](../webH264) - see the root [README](../../README.md)
+for how the two compare and which one to pick. Both share the same streaming page
+([stream.html](../stream.html)) and the same on-device WiFi setup flow.
 
-Don't want to install PlatformIO just to try this? Every push to `main` is built
-automatically and published as ready-to-flash firmware at
-**[lemio.github.io/LilyGo-AMOLED-WebJPEG](https://lemio.github.io/LilyGo-AMOLED-WebJPEG/)**
-- open it in Chrome or Edge (Web Serial support required), plug the board in over USB,
-and flash it directly from the browser using
-[ESP32-S3-Flasher](https://github.com/lemio/ESP32-S3-Flasher). The page also lets you
-fill in your WiFi SSID/password/mDNS hostname - they get patched into the firmware at
-flash time, no recompiling needed.
+## Flashing
 
-*One-time setup for maintainers: GitHub Pages must be enabled once in this repo's
-Settings > Pages, with source set to the `docs/` folder on `main` - the workflow at
-[build-and-publish-flasher.yml](../../.github/workflows/build-and-publish-flasher.yml)
-keeps `docs/` up to date after that.*
-
-## Flashing with PlatformIO
-
-```bash
-pio run -e T-Display-AMOLED --target upload
-```
-
-Before compiling, either use the browser flasher above to set your WiFi credentials, or
-edit the placeholder values directly in [webJPEG.ino](./webJPEG.ino):
-
-```cpp
-const char ssid[100] = "|*S*|";           // replace with your WiFi SSID
-const char password[100] = "|*P*|";       // replace with your WiFi password
-const char mdnsName[100] = "esp-webjpeg"; // reachable at http://esp-webjpeg.local
-```
+See the root [README](../../README.md#flashing) for the browser flasher (no PlatformIO
+install needed) and the PlatformIO command-line steps. This example's PlatformIO
+environment name is `webJPEG`.
 
 ## Board support
 
@@ -61,15 +40,16 @@ issue with your board model and a serial log from boot.
 
 ## Using it
 
-1. Flash the firmware (see above) and open the Serial Monitor - it prints the assigned
-   IP address, and the display itself shows it plus the mDNS hostname once WiFi
-   connects.
+1. Flash the firmware and open the Serial Monitor - it prints the assigned IP address,
+   and the display itself shows a connection spinner, then the IP address and mDNS
+   hostname once WiFi connects (see the root README's "Setup flow" section - this is
+   identical to webH264's).
 2. Visit `http://<that address>` (or `http://esp-webjpeg.local`, unless you set a
-   different mDNS hostname) in Chrome, Edge, or Firefox. The board doesn't serve the
-   streaming page itself - it 302-redirects you to the HTTPS copy of
-   [webrtc_stream.html](./webrtc_stream.html) hosted on GitHub Pages, pre-filling the
-   `espAddress` field with the board's address. See "Why the redirect" below for why,
-   and the one manual step it requires.
+   different mDNS hostname). The board doesn't serve the streaming page itself - it
+   302-redirects you to the HTTPS copy of [stream.html](../stream.html) hosted on GitHub
+   Pages, pre-filling the `espAddress` field with the board's address and detecting that
+   this is a webJPEG board. See the root README's "Why the redirect" section for why,
+   and the one manual step it requires (allowing "insecure content" once per browser).
 3. The Display Size dropdown auto-detects your board's resolution (via `/boardinfo`) -
    override it manually if detection fails or you're pointing at a different board.
    Pick a source (webcam or screen share), then "▶️ Start Streaming" and grant the
@@ -77,54 +57,32 @@ issue with your board model and a serial log from boot.
    if its aspect ratio doesn't match, resize your browser window/tab beforehand (e.g.
    via devtools) to avoid distortion.
 
-### Why the redirect
+## Options in stream.html
 
-`getDisplayMedia()`/`getUserMedia()` (screen share / camera capture) only work in a
-"secure context" - HTTPS, or literal `localhost`/`127.0.0.1`. A LAN address or `.local`
-mDNS name served over plain `http://`, which is all this board can do, doesn't qualify -
-so serving the streaming page directly from the board would load fine but silently have
-no working "Start Streaming" button. Redirecting to the same page hosted over HTTPS on
-GitHub Pages fixes that. Two consequences of this, worth knowing:
+Once [stream.html](../stream.html) detects a webJPEG board (or you force "Mode: Force
+WebJPEG"), it shows:
 
-- **You need internet access** to reach GitHub Pages, even though the actual video
-  stream stays entirely on your LAN afterwards. If you don't have internet access, open
-  [webrtc_stream.html](./webrtc_stream.html) as a local file instead (`file://` also
-  counts as a secure context, and it doesn't need to reach GitHub Pages at all) and fill
-  in `espAddress` yourself.
-- **The WebSocket connection back to the board is `ws://`, not `wss://`** (the board
-  can't easily serve TLS). Browsers block that as "mixed content" by default when the
-  page itself is HTTPS, so the stream will fail to start the first time. In Chrome/Edge:
-  click the padlock/tune icon left of the address bar → **Site settings** → **Insecure
-  content** → **Allow**, then reload. This is a one-time exception per browser, tied to
-  the `lemio.github.io` origin - it doesn't weaken anything else, since the "insecure"
-  traffic is only ever going to your own board on your own LAN.
-- **`fetch()` calls back to the board (like `/boardinfo`, used for auto-detecting
-  display size) are cross-origin too**, since the page's origin is now `github.io`, not
-  the board. `webJPEG.ino` sends `Access-Control-Allow-Origin: *` on every response to
-  allow this - safe here since every endpoint is read-only board/status info or the
-  streaming WebSocket, nothing sensitive.
+- **Display Size** - auto-filled from `/boardinfo`; override manually if it's wrong or
+  the board is unreachable at page load.
+- **Source** - webcam or screen share.
+- **Frame Rate** - how often the browser captures and sends a frame.
+- **JPEG Quality** - lower for less bandwidth/lag, higher for image quality.
+- **Monochrome Mode** - converts frames to grayscale before encoding; smaller frames,
+  faster to send, at the cost of colour. Sent over a separate `/ws-mono` WebSocket
+  endpoint from colour mode's `/ws`.
 
-### URL query parameters
-
-`webrtc_stream.html` accepts these query parameters, useful for bookmarking a specific
-setup (the board's own `/` redirect only ever sets `espAddress`):
-
-- `espAddress` - ESP32 URL (set automatically by the board's redirect)
-- `displaySize` - `WxH` or one of the predefined sizes
-- `customWidth`, `customHeight` - used when `displaySize=custom`
-- `sourceType` - `camera` or `screen`
-- `frameRate` - FPS (1-30)
-- `quality` - JPEG quality (0.1-1.0)
-- `monoMode` - `true`/`false`
-
-Example: `webrtc_stream.html?espAddress=http://192.168.1.88&displaySize=600x450&frameRate=10`
+`stream.html` also accepts URL query parameters for bookmarking a specific setup:
+`espAddress`, `displaySize` (`WxH` or a predefined size), `customWidth`/`customHeight`
+(when `displaySize=custom`), `sourceType` (`camera`/`screen`), `frameRate` (1-30),
+`quality` (0.1-1.0), `monoMode` (`true`/`false`).
 
 ## Troubleshooting
 
 - **"Start Streaming" does nothing / permission prompt never appears:** you're probably
   on the board's own `http://` page rather than the HTTPS redirect target - check the
-  address bar says `https://lemio.github.io/...`. If it already does, see "Why the
-  redirect" above for the one-time insecure-content exception the WebSocket needs.
+  address bar says `https://lemio.github.io/...`. If it already does, see the root
+  README's "Why the redirect" for the one-time insecure-content exception the WebSocket
+  needs.
 - **Image looks wrong (bands, wrong colors, partial screen):** the display size selected
   in the browser must match your physical board. Auto-detection should get this right;
   if it didn't (e.g. `/boardinfo` unreachable), set it manually from the table above.
@@ -136,9 +94,14 @@ Example: `webrtc_stream.html?espAddress=http://192.168.1.88&displaySize=600x450&
   [LilyGo_AMOLED.h](../../src/LilyGo_AMOLED.h)):
   `LILYGO_AMOLED_147=1`, `LILYGO_AMOLED_191=2`, `LILYGO_AMOLED_241=3`,
   `LILYGO_AMOLED_191_SPI=4`.
-- Color format is RGB565. `webJPEG.ino` only byte-swaps when pushing pixels straight to
+- Color format is RGB565. `webJPEG.cpp` only byte-swaps when pushing pixels straight to
   the display (`amoled.pushColors`) - the `TFT_eSprite` buffer path swaps internally via
   `setSwapBytes(true)`, so swapping there too would double-flip the colors.
 - When the incoming JPEG doesn't exactly match the display's resolution, frames are
   rendered into a sprite buffer and centered instead of pushed directly - slower, but
   avoids corrupting partial-tile edges.
+- `/boardinfo` (JSON: `variant`, `name`, `width`, `height`, `boardId`) is what
+  `stream.html` uses to tell this firmware apart from webH264's and to auto-fill the
+  display size. Served with `Access-Control-Allow-Origin: *` since the calling page is
+  cross-origin (GitHub Pages, not the device) - safe here since every endpoint is
+  read-only board/status info or the streaming WebSocket, nothing sensitive.

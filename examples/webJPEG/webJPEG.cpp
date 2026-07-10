@@ -446,9 +446,12 @@ void setupWebServer() {
     // sensitive or mutating - so a wildcard is fine.
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
 
-    // Serve board info as JSON
+    // Serve board info as JSON - "variant" lets the shared stream.html page tell this
+    // firmware apart from webH264's and adjust its controls/streaming protocol
+    // accordingly (see examples/webH264/webH264.cpp's matching /boardinfo).
     server.on("/boardinfo", HTTP_GET, [](AsyncWebServerRequest *request) {
         String json = "{";
+        json += "\"variant\":\"jpeg\",";
         json += "\"name\":\"" + String(amoled.getName()) + "\",";
         json += "\"width\":" + String(WIDTH) + ",";
         json += "\"height\":" + String(HEIGHT) + ",";
@@ -457,15 +460,16 @@ void setupWebServer() {
         request->send(200, "application/json", json);
     });
 
-    // Redirect to the HTTPS-hosted copy of this page on GitHub Pages. getDisplayMedia()/
-    // getUserMedia() require a "secure context" - plain http:// on a LAN address or
-    // mDNS hostname doesn't qualify (only literal localhost/127.0.0.1 do), so serving
-    // the streaming UI directly from here would silently fail to offer screen share.
-    // See examples/webJPEG/README.md for the tradeoffs this introduces (needs internet
-    // access to reach GitHub Pages, and a one-time browser permission for the WebSocket
-    // connection back to this device, since it's ws:// not wss://).
+    // Redirect to the HTTPS-hosted copy of the streaming page on GitHub Pages.
+    // getDisplayMedia()/getUserMedia() require a "secure context" - plain http:// on a
+    // LAN address or mDNS hostname doesn't qualify (only literal localhost/127.0.0.1
+    // do), so serving the streaming UI directly from here would silently fail to offer
+    // screen share. See examples/webJPEG/README.md for the tradeoffs this introduces
+    // (needs internet access to reach GitHub Pages, and a one-time browser permission
+    // for the WebSocket connection back to this device, since it's ws:// not wss://).
+    // This same page also serves webH264 - see examples/stream.html.
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        String url = "https://lemio.github.io/LilyGo-AMOLED-WebJPEG/webrtc_stream.html?espAddress=http://" + request->host();
+        String url = "https://lemio.github.io/LilyGo-AMOLED-WebJPEG/stream.html?espAddress=http://" + request->host();
         request->redirect(url);
     });
 
