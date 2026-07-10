@@ -27,10 +27,10 @@ of a serial link and a script watching your cursor, and full colour instead of 1
 | | [webJPEG](examples/webJPEG) | [webH264](examples/webH264) |
 | --- | --- | --- |
 | Codec | MJPEG (one JPEG per frame) | H.264 (WebCodecs `VideoEncoder`) |
-| Boards | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) | 2.41"/T4-S3 only (fixed 600x450) |
-| Frame rate | Up to ~30fps, tunable | ~3-5fps (decoder-bound) |
+| Boards | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) |
+| Frame rate | Up to ~30fps, tunable | ~3-5fps on T4-S3's 600x450 (decoder-bound); faster on smaller panels |
 | Bandwidth | Higher for the same visual quality | Much lower - H.264 compresses far better |
-| Best for | Most boards, smoothest motion | T4-S3 owners who want a sharper image at lower bandwidth and don't mind a slower decoder |
+| Best for | Most boards, smoothest motion | A sharper image at lower bandwidth, on boards where a slower decoder is acceptable |
 
 Both examples share the same streaming page and WiFi setup flow - see
 [stream.html](examples/stream.html), which auto-detects which one is running on the
@@ -127,7 +127,7 @@ GitHub Pages fixes that. Two consequences worth knowing:
 examples/
 ├── stream.html  # Shared browser streaming page for both examples below - auto-detects which one is running
 ├── webJPEG      # MJPEG over WebSocket - works on all boards above (see comparison table)
-└── webH264      # H.264 over WebSocket - T4-S3 only, sharper image, lower bandwidth
+└── webH264      # H.264 over WebSocket - also works on all boards above, sharper image, lower bandwidth
 ```
 
 See each example's own README ([webJPEG](examples/webJPEG/README.md),

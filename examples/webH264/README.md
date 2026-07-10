@@ -1,6 +1,6 @@
 # webH264
 
-Streams a browser tab, window, or camera to a LilyGo T4-S3 AMOLED board over WiFi.
+Streams a browser tab, window, or camera to a LilyGo T-Display AMOLED board over WiFi.
 The browser captures video with `getDisplayMedia`/`getUserMedia`, encodes it as H.264
 using the [WebCodecs API](https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API)
 (`VideoEncoder`), and sends the Annex-B stream over a plain `WebSocket` - the ESP32
@@ -9,7 +9,8 @@ decodes it with Espressif's [esp_h264](https://github.com/espressif/esp-h264-com
 
 This is the sibling of [webJPEG](../webJPEG) - see the root [README](../../README.md)
 for how the two compare and which one to pick. Both share the same streaming page
-([stream.html](../stream.html)) and the same on-device WiFi setup flow.
+([stream.html](../stream.html)) and the same on-device WiFi setup flow, and both
+auto-detect the attached panel at boot - no compile-time board selection needed.
 
 **Inspiration:** using a real video codec instead of MJPEG for this kind of streaming
 was prompted by [easymcucourse/esp32base's L029_h264](https://github.com/easymcucourse/esp32base/tree/main/L029_h264)
@@ -19,13 +20,33 @@ example does (see "Why this is slower than other esp_h264 demos" below) because 
 decodes at a much smaller resolution, not because it does anything fundamentally
 different.
 
-**T4-S3 only.** Unlike webJPEG's auto-detect-any-panel support, both ends of this
-stream hardcode the resolution (600x450, the T4-S3/RM690B0 panel's native size) - the
-browser's `VideoEncoder` is configured for it and the on-device decode buffers are sized
-for it. It won't run correctly on the 1.47"/1.91" boards without changing those
-constants (`H264_WIDTH`/`H264_HEIGHT` in [stream.html](../stream.html),
-`DISPLAY_WIDTH`/`DISPLAY_HEIGHT` in [webH264.cpp](./webH264.cpp), and
-`H264_DECODE_MAX_WIDTH`/`H264_DECODE_MAX_HEIGHT` in [h264_decode.h](./h264_decode.h)).
+## Board support
+
+Like webJPEG, this calls the display library's automatic board-detection `amoled.begin()`
+(see `beginAutomatic()`/`begin()` in [LilyGo_AMOLED.cpp](../../src/LilyGo_AMOLED.cpp)),
+which probes I2C addresses at boot to tell the panels apart. The decode buffer
+(device side) and the browser's `VideoEncoder` (via `/boardinfo` - see "Technical
+notes" below) both size themselves to whatever panel is actually attached, so one
+firmware build works across the whole lineup:
+
+| Board | Panel | Native resolution |
+| ----- | ----- | ------------------ |
+| T-Display AMOLED Lite 1.47" | SH8501 | 194x368 |
+| T-Display AMOLED 1.91" (QSPI) | RM67162 | 240x536 |
+| T-Display AMOLED 1.91" (SPI) | RM67162 | 240x536 |
+| T-Display AMOLED 2.41" / T4-S3 | RM690B0 | 600x450 |
+
+Decode speed scales with pixel count (see "Flow control" and "Why this is slower than
+other esp_h264 demos" below), so the smaller panels will decode noticeably faster than
+the ~3-5fps measured on the T4-S3's 600x450 - the T4-S3 is the largest panel here, so
+it's also the slowest case.
+
+**Caveat:** this example was developed and compile-tested against the T4-S3 board only
+(the same caveat webJPEG's README already carries for its own primary test board). The
+other rows are what the shared detection code and the dynamic buffer/encoder sizing
+*should* produce, not something verified on that physical hardware here. If you hit a
+board-specific problem, please open an issue with your board model and a serial log
+from boot.
 
 ## Flashing
 
@@ -46,16 +67,21 @@ environment name is `webH264`.
    this is a webH264 board. See the root README's "Why the redirect" section for why,
    and the one manual step it requires (allowing "insecure content" once per browser).
 3. Optionally adjust the capture FPS / frames-in-flight / ignore-acks controls (see
-   "Flow control" below), and click "▶️ Start Streaming". Open the browser console (F12)
-   for detailed per-frame logs.
+   "Flow control" below), and click "▶️ Start Streaming". All three can also be changed
+   live while streaming, without restarting - useful for tuning latency vs. throughput
+   while watching the stream itself. Open the browser console (F12) for detailed
+   per-frame logs.
 
 ## Options in stream.html
 
 Once [stream.html](../stream.html) detects a webH264 board (or you force "Mode: Force
-WebH264"), it shows:
+WebH264"), it shows (all three adjustable live, mid-stream):
 
-- **Resolution** - fixed at 600x450, not user-editable (see "T4-S3 only" above).
-- **Capture FPS** - how fast the browser asks the OS to capture frames.
+- **Resolution** - auto-filled from `/boardinfo` once the board is detected, not
+  user-editable (see "Board support" above).
+- **Capture FPS** - how fast the browser asks the OS to capture frames. Changing this
+  live re-applies the constraint to the active capture track (`applyConstraints()`);
+  the browser/OS may not always honor it.
 - **Frames in flight** - how many un-acked frames the browser allows outstanding at
   once (see "Flow control" below).
 - **Ignore device acks** - disables flow control entirely.
@@ -91,9 +117,10 @@ builds Arduino as a component of a real ESP-IDF/CMake project
 ## Flow control
 
 The ESP32's software H.264 decoder is far slower than typical capture frame rates -
-expect roughly 3-5 fps at full 600x450 resolution (measured ~200-400ms per
-decode+display cycle on real screen content), and it does all its work synchronously in
-the WebSocket handler with no queue of its own. Left unmanaged, the browser would keep
+expect roughly 3-5 fps at the T4-S3's full 600x450 resolution (measured ~200-400ms per
+decode+display cycle on real screen content; smaller panels decode proportionally
+faster - see "Board support" above), and it does all its work synchronously in the
+WebSocket handler with no queue of its own. Left unmanaged, the browser would keep
 sending faster than the device can keep up and lag would grow without bound. Instead,
 the ESP32 sends a tiny WebSocket text message back after it finishes processing each
 frame, and the browser uses that as a pacing signal:
@@ -108,10 +135,10 @@ frame, and the browser uses that as a pacing signal:
   (nothing gets dropped client-side) but latency grows for as long as you keep streaming,
   since frames queue up waiting to be decoded.
 - **Capture FPS:** how fast the browser asks the OS to capture frames. Since the device
-  can only really absorb ~3-5fps, requesting much more than that (with acks not
-  ignored) just means most captured frames get immediately dropped for nothing -
-  useful to raise past that once ack-ignoring, since capture then determines the send
-  rate directly.
+  can only really absorb a few fps at a time (see "Board support" above for how that
+  varies by panel), requesting much more than that (with acks not ignored) just means
+  most captured frames get immediately dropped for nothing - useful to raise past that
+  once ack-ignoring, since capture then determines the send rate directly.
 
 ## Why this is slower than other esp_h264 demos
 
@@ -130,9 +157,10 @@ B-frames, CAVLC not CABAC) are also essentially what this example already uses -
 `avc1.42E01E` in [stream.html](../stream.html) is Baseline/Level 3.0, and Baseline
 profile mandates no B-frames/CAVLC anyway.
 
-If you want higher frame rate here at the cost of a smaller/upscaled image, lowering the
-resolution (see the constants listed under "T4-S3 only" above) is the lever that
-actually matters - decoder tuning has comparatively little effect.
+If you want a higher frame rate than the T4-S3's 600x450 gives you, the 1.47"/1.91"
+boards' smaller panels (see "Board support" above) get you that automatically, since
+resolution is now auto-detected rather than a constant to hand-edit - decoder tuning
+has comparatively little effect next to pixel count.
 
 ## Troubleshooting
 
@@ -162,9 +190,11 @@ actually matters - decoder tuning has comparatively little effect.
   SPS/PPS/IDR sequence into an already-active decode session can crash the underlying
   tinyh264 decoder), `h264_decode_parse()` per received chunk, `h264_decode_get_frame()`
   to pull out a decoded frame already converted to RGB565.
-- `esp_h264_dec_get_resolution()` reports the macroblock-aligned decode size (608x464
-  for this 600x450 stream), not the true frame size - not useful for sizing the display
-  push, so the decoder just uses the known 600x450 directly instead of querying it back.
+- `esp_h264_dec_get_resolution()` reports the macroblock-aligned decode size (e.g.
+  608x464 for a 600x450 stream), not the true frame size - not useful for sizing the
+  display push, so `h264_decode_open()` is instead given the exact width/height to use
+  directly (the attached panel's detected size - see `DISPLAY_WIDTH`/`DISPLAY_HEIGHT` in
+  [webH264.cpp](./webH264.cpp)) rather than querying it back from the decoder.
 - The WebSocket message-reassembly buffer in `webH264.cpp` is allocated once at a fixed
   size (128KB) and reused for every frame, never `malloc`'d/`free`'d per-message -
   repeated variable-size allocations on the PSRAM heap over a long session is a classic

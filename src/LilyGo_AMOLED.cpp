@@ -513,7 +513,12 @@ bool LilyGo_AMOLED::begin()
     Wire.begin(6, 7);
     Wire.beginTransmission(SY6970_SLAVE_ADDRESS);
     if (Wire.endTransmission() == 0) {
-        return beginAMOLED_241();
+        // disable_sd=true: beginAMOLED_241()'s default (false) tries to mount an SD
+        // card unconditionally; with none inserted, the failure path hits an
+        // uninitialized FreeRTOS queue and panics (boot loop). Callers that want SD
+        // support on this board should call beginAMOLED_241(false) directly instead
+        // of this auto-detecting begin().
+        return beginAMOLED_241(/* disable_sd= */ true);
     }
     log_e("Unable to detect 2.41-inch touch board model!");
 

@@ -8,16 +8,13 @@
 extern "C" {
 #endif
 
-// Largest frame the decoder will accept; must be >= the resolution the
-// browser encoder is configured for (see h264_stream.html) and <= the panel size.
-#define H264_DECODE_MAX_WIDTH  600
-#define H264_DECODE_MAX_HEIGHT 450
-
 typedef struct h264_decoder h264_decoder_t;
 
-// Opens a streaming H.264 (constrained baseline) decoder backed by
-// Espressif's esp_h264 software (tinyh264) decoder. Returns NULL on failure.
-h264_decoder_t *h264_decode_open(void);
+// Opens a streaming H.264 (constrained baseline) decoder backed by Espressif's
+// esp_h264 software (tinyh264) decoder, for frames of exactly width x height (must
+// match what the browser's VideoEncoder is configured for - see stream.html, which
+// reads this size back from /boardinfo). Returns NULL on failure.
+h264_decoder_t *h264_decode_open(int width, int height);
 
 void h264_decode_close(h264_decoder_t *dec);
 

@@ -136,7 +136,7 @@ void h264_decode_reset(h264_decoder_t *d) {
     d->frame_ready = false;
 }
 
-h264_decoder_t *h264_decode_open(void) {
+h264_decoder_t *h264_decode_open(int width, int height) {
     struct h264_decoder *d = (struct h264_decoder *)calloc(1, sizeof(*d));
     if (!d) return NULL;
 
@@ -148,13 +148,14 @@ h264_decoder_t *h264_decode_open(void) {
     // esp_h264_dec_get_resolution() reports the macroblock-aligned decode
     // size (e.g. 608x464 for a 600x450 stream), not the true frame size, so
     // it's not useful for sizing the display push. Browser and firmware are
-    // both hardcoded to this same resolution by design, so just use it
-    // directly instead of trying to query it back from the decoder.
-    d->width = H264_DECODE_MAX_WIDTH;
-    d->height = H264_DECODE_MAX_HEIGHT;
+    // both configured for this same caller-supplied resolution by design
+    // (see webH264.cpp - it's the attached panel's auto-detected size), so
+    // just use it directly instead of trying to query it back from the decoder.
+    d->width = width;
+    d->height = height;
 
     d->rgb565_buf = (uint8_t *)heap_caps_malloc(
-        (size_t)H264_DECODE_MAX_WIDTH * H264_DECODE_MAX_HEIGHT * sizeof(uint16_t),
+        (size_t)width * height * sizeof(uint16_t),
         MALLOC_CAP_SPIRAM);
     if (!d->rgb565_buf) {
         esp_h264_dec_close(d->dec);

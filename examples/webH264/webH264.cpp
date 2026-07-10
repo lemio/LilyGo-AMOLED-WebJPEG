@@ -1,7 +1,7 @@
 /**
  * @file      webH264.cpp
  * @license   MIT
- * @note      Streams a browser tab, window, or camera to the T4-S3 AMOLED display over
+ * @note      Streams a browser tab, window, or camera to a LilyGo AMOLED display over
  *            WiFi as H.264, using the browser's WebCodecs VideoEncoder and Espressif's
  *            esp_h264 (tinyh264) software decoder on-device.
  *
@@ -13,10 +13,11 @@
  *            examples/CMakeLists.txt/idf_component.yml, a root CMakeLists.txt,
  *            sdkconfig.defaults, and partitions.webH264.csv.
  *
- *            This example is T4-S3 (2.41", RM690B0, 600x450) specific - unlike
- *            webJPEG's auto-detect-any-panel support, the H.264 stream's resolution is
- *            fixed at both ends (browser encoder config and on-device decode buffer
- *            sizing both hardcode 600x450), so it won't adapt to the 1.47"/1.91" boards.
+ *            Like webJPEG, this auto-detects the attached panel at boot (amoled.begin()
+ *            in setup() below) and sizes the decode buffer/display push to match, so
+ *            one firmware build works across the whole T-Display-AMOLED lineup. The
+ *            browser side (stream.html) reads the detected resolution back from
+ *            /boardinfo and configures its VideoEncoder to match.
  *
  * Required libraries:
  * - ESPAsyncWebServer / AsyncTCP (esp32async forks, same as webJPEG)
@@ -47,11 +48,12 @@ const char mdnsName[100] = "esp-webh264";
 // Shown as a QR code so the user can find help/docs if WiFi connection fails
 const char githubRepoUrl[] = "https://github.com/lemio/LilyGo-AMOLED-WebJPEG";
 
-// LilyGo T4-S3 AMOLED panel (RM690B0) native resolution.
-static const int DISPLAY_WIDTH = 600;
-static const int DISPLAY_HEIGHT = 450;
-
 LilyGo_Class amoled;
+
+// Actual attached panel's resolution, known only after beginAutoDetect() below -
+// matches webJPEG.cpp's WIDTH/HEIGHT macro convention.
+#define DISPLAY_WIDTH  amoled.width()
+#define DISPLAY_HEIGHT amoled.height()
 AsyncWebServer server(80);
 AsyncWebSocket ws("/video-stream");
 
@@ -307,12 +309,19 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
     // h264_decode.c) - there's no separate conversion step to time here.
     int parseResult = h264_decode_parse(decoder, wsAssemblyBuf, wsAssemblyLen);
     tDecoded = millis();
+    uint16_t topLeftPixel = 0;
 
     if (parseResult == 0) {
       uint8_t *rgb_buffer = NULL;
       if (h264_decode_get_frame(decoder, &rgb_buffer, &width, &height) == 0) {
         tGotFrame = millis();
         if (width <= DISPLAY_WIDTH && height <= DISPLAY_HEIGHT) {
+          // Debug: h264_decode.c stores pixels byte-swapped for the QSPI
+          // panel (see yuv_to_rgb565()'s comment there), so un-swap this one
+          // back before decoding it into RGB565 fields for logging.
+          uint16_t rawTopLeft = ((uint16_t *)rgb_buffer)[0];
+          topLeftPixel = (rawTopLeft >> 8) | (rawTopLeft << 8);
+
           amoled.pushColors(0, 0, width, height, (uint16_t *)rgb_buffer);
           tPushed = millis();
           gotFrame = true;
@@ -331,14 +340,20 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 
     if (gotFrame) {
       frameCount++;
-      Serial.printf("Frame #%lu (%dx%d, %uB): Recv=%lums | Decode=%lums | GetFrame=%lums | Push=%lums | Ack=%lums | Total=%lums\n",
+      // RGB565 -> 8-bit-per-channel, scaled up for readability (5/6-bit
+      // fields don't span the full 0-255 range on their own).
+      uint8_t r8 = ((topLeftPixel >> 11) & 0x1F) * 255 / 31;
+      uint8_t g8 = ((topLeftPixel >> 5) & 0x3F) * 255 / 63;
+      uint8_t b8 = (topLeftPixel & 0x1F) * 255 / 31;
+      Serial.printf("Frame #%lu (%dx%d, %uB): Recv=%lums | Decode=%lums | GetFrame=%lums | Push=%lums | Ack=%lums | Total=%lums | TopLeft=0x%04X (R=%u G=%u B=%u)\n",
                     (unsigned long)frameCount, width, height, (unsigned)wsAssemblyLen,
                     (unsigned long)(t0 - frameRecvStartMs),
                     (unsigned long)(tDecoded - t0),
                     (unsigned long)(tGotFrame - tDecoded),
                     (unsigned long)(tPushed - tGotFrame),
                     (unsigned long)(tAcked - tPushed),
-                    (unsigned long)(tAcked - frameRecvStartMs));
+                    (unsigned long)(tAcked - frameRecvStartMs),
+                    topLeftPixel, r8, g8, b8);
     } else {
       // No displayable frame this message (e.g. only SPS/PPS arrived, no
       // slice yet) - still worth logging Recv/Decode/Ack to see where a
@@ -356,12 +371,12 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 void setup() {
   Serial.begin(115200);
 
-  // amoled.begin() auto-detects the panel, but for the 2.41" T4-S3 it
-  // defaults to also mounting an SD card; with none inserted, the failure
-  // path hits an uninitialized FreeRTOS queue and panics (boot loop). This
-  // example is T4-S3 only (see the file header), so call it directly with
-  // SD disabled instead of the auto-detecting amoled.begin().
-  if (!amoled.beginAMOLED_241(/* disable_sd= */ true)) {
+  // Auto-detects the attached panel (same as webJPEG.cpp) - probes I2C addresses
+  // at boot to tell the 1.47"/1.91"/2.41" boards apart, no compile-time board
+  // selection needed. See beginAMOLED_241()'s comment in
+  // src/LilyGo_AMOLED.cpp for why begin() disables SD-card init on the 2.41"
+  // T4-S3 specifically (mounting one that isn't there panics on boot).
+  if (!amoled.begin()) {
     Serial.println("Failed to detect the LilyGo AMOLED panel!");
     while (1) delay(1000);
   }
@@ -371,7 +386,7 @@ void setup() {
   statusSpr.setColorDepth(16);
   statusSpr.createSprite(DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
-  decoder = h264_decode_open();
+  decoder = h264_decode_open(DISPLAY_WIDTH, DISPLAY_HEIGHT);
   if (!decoder) {
     Serial.println("Fatal: failed to open H.264 decoder!");
     statusSpr.fillSprite(TFT_BLACK);
