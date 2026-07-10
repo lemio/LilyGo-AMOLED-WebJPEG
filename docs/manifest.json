@@ -4,50 +4,51 @@
     "subtitle": "Flash the browser-to-display WebJPEG streamer straight from your browser - no PlatformIO needed"
   },
   "firmwares": {
-    "T-Display-AMOLED": {
-      "name": "WebJPEG Stream Display",
-      "description": "Streams a browser tab, camera, or screen share to the AMOLED display over WiFi as MJPEG frames. Auto-detects the attached panel at boot, so this one firmware works on the 1.47\" Lite, 1.91\", and 2.41\"/T4-S3 T-Display AMOLED boards.",
+    "webH264": {
+      "name": "webH264",
+      "description": "",
       "files": [
         {
-          "path": "firmware/T-Display-AMOLED/bootloader.bin",
+          "path": "firmware/webH264/bootloader.bin",
           "offset": 0
         },
         {
-          "path": "firmware/T-Display-AMOLED/partitions.bin",
+          "path": "firmware/webH264/partitions.bin",
           "offset": 32768
         },
         {
-          "path": "firmware/T-Display-AMOLED/boot_app0.bin",
+          "path": "firmware/webH264/boot_app0.bin",
           "offset": 57344
         },
         {
-          "path": "firmware/T-Display-AMOLED/firmware.bin",
+          "path": "firmware/webH264/firmware.bin",
           "offset": 65536
         }
       ],
-      "hardware": "T-Display-AMOLED",
-      "variables": [
+      "hardware": "T-Display-AMOLED"
+    },
+    "webJPEG": {
+      "name": "webJPEG",
+      "description": "",
+      "files": [
         {
-          "firmware_name": "|*S*|",
-          "readable_name": "WiFi Name (SSID)",
-          "default_value": "",
-          "max_length": 100
+          "path": "firmware/webJPEG/bootloader.bin",
+          "offset": 0
         },
         {
-          "firmware_name": "|*P*|",
-          "readable_name": "WiFi Password",
-          "default_value": "",
-          "max_length": 100
+          "path": "firmware/webJPEG/partitions.bin",
+          "offset": 32768
         },
         {
-          "firmware_name": "esp-webjpeg",
-          "readable_name": "mDNS Hostname",
-          "default_value": "esp-webjpeg",
-          "postfix": ".local",
-          "max_length": 100
+          "path": "firmware/webJPEG/boot_app0.bin",
+          "offset": 57344
+        },
+        {
+          "path": "firmware/webJPEG/firmware.bin",
+          "offset": 65536
         }
       ],
-      "sourceUrl": "https://github.com/lemio/LilyGo-AMOLED-WebJPEG/tree/main/examples/webJPEG"
+      "hardware": "T-Display-AMOLED"
     }
   }
 }
