@@ -56,9 +56,21 @@ static bool should_decode_nal(const uint8_t *nal, int nal_len) {
 }
 
 static inline uint16_t yuv_to_rgb565(int y, int u, int v) {
-    int r = y + ((v * 359) >> 8);
-    int g = y - ((u * 88 + v * 183) >> 8);
-    int b = y + ((u * 454) >> 8);
+    // H.264 conventionally encodes luma/chroma in limited ("studio"/TV) range -
+    // Y in [16,235], Cb/Cr in [16,240] (centered at 128, which the caller has
+    // already subtracted off before calling this) - not full [0,255] PC range.
+    // The matrix below (1.402/0.344/0.714/1.773, as *359/88/183/454 >> 8) is the
+    // correct full-range YCbCr->RGB conversion, but without this rescale it was
+    // being fed limited-range samples directly: black (Y=16) decoded to
+    // RGB(16,16,16), a washed-out dark gray instead of true black - confirmed via
+    // this file's debug top-left-pixel log in webH264.cpp.
+    int yf = ((y - 16) * 298) >> 8; // 255/219 ~= 1.164, Q8 fixed-point
+    int uf = (u * 291) >> 8;        // 255/224 ~= 1.138
+    int vf = (v * 291) >> 8;
+
+    int r = yf + ((vf * 359) >> 8);
+    int g = yf - ((uf * 88 + vf * 183) >> 8);
+    int b = yf + ((uf * 454) >> 8);
 
     if (r < 0) r = 0; else if (r > 255) r = 255;
     if (g < 0) g = 0; else if (g > 255) g = 255;
