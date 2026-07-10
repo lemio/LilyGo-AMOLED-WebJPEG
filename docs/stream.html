@@ -186,7 +186,7 @@
             <div class="mode-h264-only">
                 <div>
                     <label>Resolution:</label>
-                    <span>600x450 (fixed - T4-S3 only)</span>
+                    <span id="h264ResolutionLabel">detecting...</span>
                 </div>
                 <div>
                     <label>Capture FPS:</label>
@@ -285,6 +285,11 @@
         let streaming = false;
         let activeMode = null; // 'jpeg' or 'h264' - which pipeline is actually running
         let detectedVariant = null; // 'jpeg' | 'h264' | null (detection not yet succeeded)
+        // webH264's actual panel resolution, from /boardinfo - it auto-detects its
+        // attached panel just like webJPEG does, so this isn't a fixed constant.
+        // 600x450 (T4-S3) is only a fallback for before detection succeeds.
+        let h264DetectedWidth = 600;
+        let h264DetectedHeight = 450;
         let ws = null;
         let wsConnected = false;
 
@@ -319,10 +324,11 @@
         }
 
         // Fetches /boardinfo from the device to figure out which firmware variant is
-        // running (webJPEG vs webH264) and, for webJPEG, its actual panel resolution -
-        // this is the only place that tells the two examples apart, since they're
-        // otherwise served from this same page. Cross-origin since this page is served
-        // from GitHub Pages, not the board itself; the board sends
+        // running (webJPEG vs webH264) and its actual panel resolution - both examples
+        // auto-detect their attached panel at boot, so neither has a fixed size. This
+        // is the only place that tells the two examples apart, since they're otherwise
+        // served from this same page. Cross-origin since this page is served from
+        // GitHub Pages, not the board itself; the board sends
         // Access-Control-Allow-Origin: * to allow it. Silently leaves the current state
         // alone on any failure (unreachable board, no espAddress yet, etc).
         async function detectBoardConfig() {
@@ -350,6 +356,10 @@
                         customHeightInput.value = boardInfo.height;
                         customSizeDiv.style.display = 'block';
                     }
+                } else if (detectedVariant === 'h264' && boardInfo.width && boardInfo.height) {
+                    h264DetectedWidth = boardInfo.width;
+                    h264DetectedHeight = boardInfo.height;
+                    document.getElementById('h264ResolutionLabel').textContent = `${h264DetectedWidth}x${h264DetectedHeight} (auto-detected)`;
                 }
 
                 console.log('Detected board:', boardInfo);
@@ -690,8 +700,6 @@
         // WebH264 pipeline (WebCodecs VideoEncoder -> WebSocket)
         // ============================================================
 
-        const H264_WIDTH = 600;
-        const H264_HEIGHT = 450;
         const H264_KEYFRAME_INTERVAL_MS = 2000;
         // Not a pacing knob - TCP guarantees an ack isn't silently lost, so this only
         // protects against a genuinely stuck/crashed device: without it, a missing ack
@@ -704,6 +712,7 @@
         const H264_STATS_UPDATE_INTERVAL_MS = 250;
 
         let h264Encoder = null;
+        let h264VideoTrack = null; // live handle so FPS changes can apply without restarting capture
         let h264IgnoreAcks = false;
         let h264MaxInFlight = 1;
         // FIFO of { sentAt } for frames sent but not yet acked. Acks arrive in the same
@@ -719,7 +728,31 @@
         let h264StreamStartTime = 0;
         let h264LastFrameTimestamp = null;
         let h264LastReadWallTime = null;
-        const h264ConfigInputs = [h264FpsInput, maxInFlightSelect, ignoreAcksCheckbox];
+
+        // All three of these can be changed live, mid-stream - readH264Frames() below
+        // reads h264IgnoreAcks/h264MaxInFlight fresh every frame, and FPS is re-applied
+        // to the live capture track via applyConstraints() rather than needing a restart.
+        maxInFlightSelect.addEventListener('change', () => {
+            h264MaxInFlight = Math.max(1, parseInt(maxInFlightSelect.value, 10) || 1);
+            h264Log(`frames-in-flight changed live to ${h264MaxInFlight}`);
+        });
+        ignoreAcksCheckbox.addEventListener('change', () => {
+            h264IgnoreAcks = ignoreAcksCheckbox.checked;
+            h264Log(`ignoreAcks changed live to ${h264IgnoreAcks}`);
+            // Stale in-flight entries from before the switch shouldn't affect drop
+            // decisions made after it, in either direction.
+            h264InFlight = [];
+        });
+        h264FpsInput.addEventListener('change', async () => {
+            const fps = Math.max(1, parseInt(h264FpsInput.value, 10) || 5);
+            if (!h264VideoTrack) return;
+            try {
+                await h264VideoTrack.applyConstraints({ frameRate: { ideal: fps } });
+                h264Log(`capture FPS changed live to ${fps}`);
+            } catch (err) {
+                h264Log('WARN: live FPS change rejected by the browser/OS', err);
+            }
+        });
 
         function h264Log(...args) {
             const t = h264StreamStartTime ? (performance.now() - h264StreamStartTime).toFixed(1) : '0.0';
@@ -781,12 +814,13 @@
                 h264MaxInFlight = Math.max(1, parseInt(maxInFlightSelect.value, 10) || 1);
 
                 const mediaStream = await navigator.mediaDevices.getDisplayMedia({
-                    video: { width: { ideal: H264_WIDTH }, height: { ideal: H264_HEIGHT }, frameRate: { ideal: fps } },
+                    video: { width: { ideal: h264DetectedWidth }, height: { ideal: h264DetectedHeight }, frameRate: { ideal: fps } },
                     audio: false
                 });
                 video.srcObject = mediaStream;
 
                 const [videoTrack] = mediaStream.getVideoTracks();
+                h264VideoTrack = videoTrack;
                 h264Log('capture started, track settings:', JSON.stringify(videoTrack.getSettings()));
                 videoTrack.onended = () => {
                     h264Log('capture track ended');
@@ -816,13 +850,14 @@
                     }
                 });
 
-                // width/height here must match H264_DECODE_MAX_WIDTH/HEIGHT and the
-                // DISPLAY_WIDTH/HEIGHT checks in webH264.cpp.
+                // width/height here must match the device's actual detected panel size
+                // (h264DetectedWidth/Height, from /boardinfo - see detectBoardConfig())
+                // since the decode buffer in webH264.cpp is allocated to fit exactly it.
                 h264Encoder.configure({
                     codec: 'avc1.42E01E',   // H.264 constrained baseline, the profile the
                                              // ESP32 SW decoder supports
-                    width: H264_WIDTH,
-                    height: H264_HEIGHT,
+                    width: h264DetectedWidth,
+                    height: h264DetectedHeight,
                     bitrate: 700_000,
                     bitrateMode: 'constant',
                     latencyMode: 'realtime',
@@ -841,8 +876,7 @@
                 h264StatsTimer = setInterval(updateH264Status, H264_STATS_UPDATE_INTERVAL_MS);
                 updateStatus('✅ Streaming active', 'success');
                 streaming = true;
-                h264ConfigInputs.forEach((el) => { el.disabled = true; });
-                h264Log(`config: ${H264_WIDTH}x${H264_HEIGHT} @ requested ${fps}fps, keyframe every ${H264_KEYFRAME_INTERVAL_MS}ms, ` +
+                h264Log(`config: ${h264DetectedWidth}x${h264DetectedHeight} @ requested ${fps}fps, keyframe every ${H264_KEYFRAME_INTERVAL_MS}ms, ` +
                     `ignoreAcks=${h264IgnoreAcks}, maxInFlight=${h264MaxInFlight}, stall timeout ${H264_STALL_TIMEOUT_MS}ms`);
                 readH264Frames(reader);
             } catch (err) {
@@ -908,6 +942,7 @@
                 video.srcObject.getTracks().forEach((track) => track.stop());
                 video.srcObject = null;
             }
+            h264VideoTrack = null;
             if (h264Encoder && h264Encoder.state !== 'closed') {
                 h264Encoder.close();
             }
@@ -917,7 +952,6 @@
                 ws = null;
             }
             h264InFlight = [];
-            h264ConfigInputs.forEach((el) => { el.disabled = false; });
             startBtn.disabled = false;
             stopBtn.disabled = true;
             updateStatus('⏹️ Streaming stopped', 'info');
