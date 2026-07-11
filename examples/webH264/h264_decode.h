@@ -16,8 +16,6 @@ typedef struct h264_decoder h264_decoder_t;
 // reads this size back from /boardinfo). Returns NULL on failure.
 h264_decoder_t *h264_decode_open(int width, int height);
 
-void h264_decode_close(h264_decoder_t *dec);
-
 // Recreates the underlying decoder so a new streaming session starts from a
 // clean state. Feeding a fresh SPS/PPS/IDR sequence into an already-active
 // decode session (e.g. after a browser reconnect) can crash the underlying

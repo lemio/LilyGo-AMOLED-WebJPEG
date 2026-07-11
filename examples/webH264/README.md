@@ -67,7 +67,7 @@ environment name is `webH264`.
    this is a webH264 board. See the root README's "Why the redirect" section for why,
    and the one manual step it requires (allowing "insecure content" once per browser).
 3. Optionally adjust the capture FPS / frames-in-flight / ignore-acks controls (see
-   "Flow control" below), and click "▶️ Start Streaming". All three can also be changed
+   "Flow control" below), and click "Start Streaming". All three can also be changed
    live while streaming, without restarting - useful for tuning latency vs. throughput
    while watching the stream itself. Open the browser console (F12) for detailed
    per-frame logs.
@@ -110,9 +110,9 @@ builds Arduino as a component of a real ESP-IDF/CMake project
   [partitions.webH264.csv](../../partitions.webH264.csv) - all required by the ESP-IDF
   CMake build, none of which the plain-Arduino `webJPEG` example needs.
 - Its own minimal `lib_deps` in `[env:webH264]` rather than inheriting the shared
-  `[env]` list - deliberately excludes dependencies (JPEGDecoder, TinyGPSPlus, etc.)
-  other examples need but this one doesn't, since untested libraries under this less
-  common framework combination are a real build risk, not just dead weight.
+  `[env]` list - only what this example and this repo's own `src/` actually need,
+  since untested libraries under this less common framework combination are a real
+  build risk.
 
 ## Flow control
 

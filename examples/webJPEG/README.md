@@ -2,9 +2,8 @@
 
 Streams a browser tab, window, or camera to a LilyGo T-Display AMOLED board over WiFi.
 The browser captures video with `getDisplayMedia`/`getUserMedia`, draws each frame to a
-`<canvas>`, encodes it as a JPEG, and sends it over a plain `WebSocket` - the ESP32
-decodes each JPEG and pushes it straight to the display. (This is not the WebRTC
-protocol - no `RTCPeerConnection`/SDP/ICE - despite the repo's history using that name.)
+`<canvas>`, encodes it as a JPEG, and sends it over a plain `WebSocket`. The ESP32
+decodes each JPEG and pushes it straight to the display.
 
 This is the sibling of [webH264](../webH264) - see the root [README](../../README.md)
 for how the two compare and which one to pick. Both share the same streaming page
@@ -50,12 +49,10 @@ issue with your board model and a serial log from boot.
    Pages, pre-filling the `espAddress` field with the board's address and detecting that
    this is a webJPEG board. See the root README's "Why the redirect" section for why,
    and the one manual step it requires (allowing "insecure content" once per browser).
-3. The Display Size dropdown auto-detects your board's resolution (via `/boardinfo`) -
-   override it manually if detection fails or you're pointing at a different board.
-   Pick a source (webcam or screen share), then "▶️ Start Streaming" and grant the
-   permission prompt. Whatever you capture is stretched to fill the display exactly -
-   if its aspect ratio doesn't match, resize your browser window/tab beforehand (e.g.
-   via devtools) to avoid distortion.
+3. The Display Size dropdown auto-detects your board's resolution - override it
+   manually if detection fails. Pick a source (webcam or screen share), then Start
+   Streaming and grant the permission prompt. Captured video is stretched to fill the
+   display exactly, so match its aspect ratio to avoid distortion.
 
 ## Options in stream.html
 

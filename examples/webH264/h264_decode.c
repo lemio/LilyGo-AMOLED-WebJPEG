@@ -60,10 +60,9 @@ static inline uint16_t yuv_to_rgb565(int y, int u, int v) {
     // Y in [16,235], Cb/Cr in [16,240] (centered at 128, which the caller has
     // already subtracted off before calling this) - not full [0,255] PC range.
     // The matrix below (1.402/0.344/0.714/1.773, as *359/88/183/454 >> 8) is the
-    // correct full-range YCbCr->RGB conversion, but without this rescale it was
-    // being fed limited-range samples directly: black (Y=16) decoded to
-    // RGB(16,16,16), a washed-out dark gray instead of true black - confirmed via
-    // this file's debug top-left-pixel log in webH264.cpp.
+    // correct full-range YCbCr->RGB conversion. Feeding it limited-range samples
+    // directly (skipping this rescale) makes black (Y=16) decode to RGB(16,16,16)
+    // - a washed-out dark gray instead of true black.
     int yf = ((y - 16) * 298) >> 8; // 255/219 ~= 1.164, Q8 fixed-point
     int uf = (u * 291) >> 8;        // 255/224 ~= 1.138
     int vf = (v * 291) >> 8;
@@ -165,16 +164,6 @@ h264_decoder_t *h264_decode_open(int width, int height) {
     }
     ESP_LOGI(TAG, "decoder open, %dx%d", d->width, d->height);
     return d;
-}
-
-void h264_decode_close(h264_decoder_t *d) {
-    if (!d) return;
-    if (d->dec) {
-        esp_h264_dec_close(d->dec);
-        esp_h264_dec_del(d->dec);
-    }
-    if (d->rgb565_buf) heap_caps_free(d->rgb565_buf);
-    free(d);
 }
 
 int h264_decode_parse(h264_decoder_t *d, const uint8_t *data, size_t len) {

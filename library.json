@@ -1,8 +1,8 @@
 {
   "name": "LilyGo-AMOLED-WebJPEG",
   "version": "1.2.0",
-  "description": "Streams a browser tab, window, or camera to a LilyGo T-Display AMOLED board over WiFi (WebSocket + MJPEG). Fork of LilyGo-AMOLED-Series trimmed to this one example.",
-  "keywords": "lilygo,amoled,webjpeg,streaming,mjpeg,websocket",
+  "description": "Streams a browser tab, window, or camera to a LilyGo T-Display AMOLED board over WiFi as MJPEG or H.264. Fork of LilyGo-AMOLED-Series trimmed to these two examples.",
+  "keywords": "lilygo,amoled,webjpeg,webh264,streaming,mjpeg,h264,websocket",
   "authors": [
     {
       "name": "Xinyuan-LilyGO",
@@ -29,28 +29,12 @@
       "LICENSE",
       "library.json",
       "library.properties",
-      "README.md",
-      "keywords.txt",
+      "README.MD",
       "src/*",
       "examples/*"
     ]
   },
   "dependencies": [
-    {
-      "owner": "mikalhart",
-      "name": "TinyGPSPlus",
-      "version": "1.0.3"
-    },
-    {
-      "owner": "adafruit",
-      "name": "Adafruit NeoPixel",
-      "version": "1.11.0"
-    },
-    {
-      "owner": "bxparks",
-      "name": "AceButton",
-      "version": "1.10.1"
-    },
     {
       "owner": "lvgl",
       "name": "lvgl",
@@ -77,16 +61,6 @@
       "version": "^2.0.0"
     },
     {
-      "owner": "sparkfun",
-      "name": "SparkFun MAX3010x Pulse and Proximity Sensor Library",
-      "version": "^1.1.2"
-    },
-    {
-      "owner": "paulstoffregen",
-      "name": "OneWire",
-      "version": "^2.3.8"
-    },
-    {
       "owner": "esp32async",
       "name": "ESPAsyncWebServer",
       "version": "^3.9.2"
@@ -97,7 +71,7 @@
       "version": "^3.4.9"
     }
   ],
-  "examples": ["examples/*/*.ino"],
+  "examples": ["examples/*/*.cpp"],
   "frameworks": ["arduino"],
   "platforms": "esp32",
   "headers": "LilyGo_AMOLED.h"

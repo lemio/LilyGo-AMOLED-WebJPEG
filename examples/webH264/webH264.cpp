@@ -50,7 +50,7 @@ const char githubRepoUrl[] = "https://github.com/lemio/LilyGo-AMOLED-WebJPEG";
 
 LilyGo_Class amoled;
 
-// Actual attached panel's resolution, known only after beginAutoDetect() below -
+// Actual attached panel's resolution, known only after amoled.begin() in setup() -
 // matches webJPEG.cpp's WIDTH/HEIGHT macro convention.
 #define DISPLAY_WIDTH  amoled.width()
 #define DISPLAY_HEIGHT amoled.height()
@@ -316,9 +316,8 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
       if (h264_decode_get_frame(decoder, &rgb_buffer, &width, &height) == 0) {
         tGotFrame = millis();
         if (width <= DISPLAY_WIDTH && height <= DISPLAY_HEIGHT) {
-          // Debug: h264_decode.c stores pixels byte-swapped for the QSPI
-          // panel (see yuv_to_rgb565()'s comment there), so un-swap this one
-          // back before decoding it into RGB565 fields for logging.
+          // h264_decode.c stores pixels byte-swapped for the QSPI panel, so
+          // un-swap this one back before logging it as RGB565 below.
           uint16_t rawTopLeft = ((uint16_t *)rgb_buffer)[0];
           topLeftPixel = (rawTopLeft >> 8) | (rawTopLeft << 8);
 
@@ -412,10 +411,8 @@ void setup() {
     while (1) delay(1000);
   }
 
-  // Connect to WiFi
   setupWiFi();
 
-  // Start web server
   if (WiFi.status() == WL_CONNECTED) {
     ws.onEvent(onWsEvent);
     server.addHandler(&ws);

@@ -130,12 +130,12 @@
 </head>
 <body>
     <div class="container">
-        <h1>🎥 ESP32 AMOLED Video Stream</h1>
+        <h1>ESP32 AMOLED Video Stream</h1>
         <p>Stream a browser tab, window, or camera to your LilyGo AMOLED board over WiFi
             <span id="variantBadge" class="variant-badge variant-unknown">detecting...</span></p>
 
         <div class="config">
-            <h3>⚙️ Configuration</h3>
+            <h3>Configuration</h3>
             <div>
                 <label>ESP32 Address:</label>
                 <input type="text" id="espAddress" placeholder="http://esp-webjpeg.local">
@@ -178,7 +178,7 @@
                 <div>
                     <label>
                         <input type="checkbox" id="monoMode" style="width: auto; margin-right: 8px;">
-                        🎨 Monochrome Mode (faster, smaller files)
+                        Monochrome Mode (faster, smaller files)
                     </label>
                 </div>
             </div>
@@ -211,8 +211,8 @@
                 <div>
                     <label>Source:</label>
                     <select id="sourceType">
-                        <option value="camera">📹 Webcam</option>
-                        <option value="screen" selected>🖥️ Screen Share</option>
+                        <option value="camera">Webcam</option>
+                        <option value="screen" selected>Screen Share</option>
                     </select>
                 </div>
             </div>
@@ -222,14 +222,14 @@
         <canvas id="canvas" style="display:none;"></canvas>
 
         <div>
-            <button id="startBtn">▶️ Start Streaming</button>
-            <button id="stopBtn" disabled>⏹️ Stop Streaming</button>
+            <button id="startBtn">Start Streaming</button>
+            <button id="stopBtn" disabled>Stop Streaming</button>
         </div>
 
-        <div id="status" class="status info">📡 Ready to stream</div>
+        <div id="status" class="status info">Ready to stream</div>
 
         <div class="stats mode-jpeg-only">
-            <h3>📊 Statistics</h3>
+            <h3>Statistics</h3>
             <div>
                 <div>Frames Sent: <span id="frameCount">0</span></div>
                 <div>Errors: <span id="errorCount">0</span></div>
@@ -240,7 +240,7 @@
         </div>
 
         <div style="margin-top: 20px; font-size: 12px; color: #888;">
-            <p>💡 Tips:</p>
+            <p>Tips:</p>
             <ul style="text-align: left; display: inline-block;">
                 <li>Make sure your ESP32 is connected to WiFi</li>
                 <li>Reachable at <code>esp-webjpeg.local</code> / <code>esp-webh264.local</code> unless you set a different mDNS hostname when flashing</li>
@@ -397,11 +397,11 @@
             await detectBoardConfig();
             const mode = effectiveMode();
             if (!mode) {
-                updateStatus('❌ Could not detect firmware variant - check the address or pick a Mode manually', 'error');
+                updateStatus('Could not detect firmware variant - check the address or pick a Mode manually', 'error');
                 return;
             }
             if (mode === 'h264' && (!('MediaStreamTrackProcessor' in window) || !('VideoEncoder' in window))) {
-                updateStatus('❌ This browser lacks WebCodecs support (use a recent Chrome or Edge)', 'error');
+                updateStatus('This browser lacks WebCodecs support (use a recent Chrome or Edge)', 'error');
                 return;
             }
 
@@ -482,7 +482,7 @@
                 const wsEndpoint = isMono ? '/ws-mono' : '/ws';
                 const wsUrl = espAddress.replace('http://', 'ws://').replace('https://', 'wss://') + wsEndpoint;
 
-                updateStatus(`🔌 Connecting to ${isMono ? 'monochrome' : 'color'} WebSocket...`, 'info');
+                updateStatus(`Connecting to ${isMono ? 'monochrome' : 'color'} WebSocket...`, 'info');
 
                 ws = new WebSocket(wsUrl);
                 ws.binaryType = 'arraybuffer';
@@ -507,7 +507,7 @@
                     wsConnected = false;
 
                     if (streaming && wasConnected) {
-                        updateStatus('⚠️ Connection lost - attempting to reconnect...', 'warning');
+                        updateStatus('Connection lost - attempting to reconnect...', 'warning');
                         attemptJpegReconnect();
                     }
                 };
@@ -518,13 +518,13 @@
             if (!streaming) return;
 
             if (reconnectAttempts >= maxReconnectAttempts) {
-                updateStatus('❌ Max reconnection attempts reached', 'error');
+                updateStatus('Max reconnection attempts reached', 'error');
                 stopJpegStreaming();
                 return;
             }
 
             reconnectAttempts++;
-            updateStatus(`🔄 Reconnecting (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`, 'warning');
+            updateStatus(`Reconnecting (attempt ${reconnectAttempts}/${maxReconnectAttempts})...`, 'warning');
 
             if (reconnectTimer) clearTimeout(reconnectTimer);
 
@@ -533,7 +533,7 @@
             reconnectTimer = setTimeout(async () => {
                 try {
                     await connectJpegWebSocket();
-                    updateStatus('✅ Reconnected successfully!', 'success');
+                    updateStatus('Reconnected successfully!', 'success');
                 } catch (err) {
                     console.error('Reconnection failed:', err);
                 }
@@ -548,7 +548,7 @@
                 let stream;
 
                 if (sourceType === 'screen') {
-                    updateStatus('🖥️ Requesting screen share...', 'info');
+                    updateStatus('Requesting screen share...', 'info');
                     const displayDims = getDisplayDimensions();
                     stream = await navigator.mediaDevices.getDisplayMedia({
                         video: {
@@ -559,7 +559,7 @@
                         audio: false
                     });
                 } else {
-                    updateStatus('🎥 Requesting camera access...', 'info');
+                    updateStatus('Requesting camera access...', 'info');
                     stream = await navigator.mediaDevices.getUserMedia({
                         video: {
                             width: { ideal: 640 },
@@ -577,7 +577,7 @@
                 fpsHistory = [];
                 frameSizeHistory = [];
 
-                updateStatus('✅ Streaming active', 'success');
+                updateStatus('Streaming active', 'success');
 
                 video.onloadedmetadata = () => {
                     sendJpegFrame();
@@ -594,13 +594,13 @@
                 console.error('Error starting stream:', err);
 
                 if (err.name === 'NotAllowedError') {
-                    updateStatus('❌ Permission denied', 'error');
+                    updateStatus('Permission denied', 'error');
                 } else if (err.name === 'NotFoundError') {
-                    updateStatus('❌ Source not found', 'error');
+                    updateStatus('Source not found', 'error');
                 } else if (err.name === 'NotSupportedError') {
-                    updateStatus('❌ Screen capture not supported', 'error');
+                    updateStatus('Screen capture not supported', 'error');
                 } else {
-                    updateStatus('❌ Error: ' + err.message, 'error');
+                    updateStatus('Error: ' + err.message, 'error');
                 }
 
                 if (ws && wsConnected) {
@@ -635,7 +635,7 @@
 
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            updateStatus('⏹️ Streaming stopped', 'info');
+            updateStatus('Streaming stopped', 'info');
         }
 
         async function sendJpegFrame() {
@@ -679,7 +679,7 @@
                             errorCount++;
                             updateJpegStats();
                             console.error('WebSocket send error:', err);
-                            updateStatus('⚠️ Connection issue', 'warning');
+                            updateStatus('Connection issue', 'warning');
                         }
                     }
 
@@ -761,13 +761,13 @@
 
         function updateH264Status() {
             const mode = h264IgnoreAcks ? 'acks ignored' : `inFlight=${h264InFlight.length}/${h264MaxInFlight}`;
-            updateStatus(`📡 Streaming (${mode})... sent ${h264SentCount}, dropped ${h264DroppedCount}, acked ${h264AckCount}`, 'success');
+            updateStatus(`Streaming (${mode})... sent ${h264SentCount}, dropped ${h264DroppedCount}, acked ${h264AckCount}`, 'success');
         }
 
         async function startH264Streaming() {
             const espAddress = espAddressInput.value.trim();
             if (!espAddress) {
-                updateStatus('❌ Enter the ESP32 address first', 'error');
+                updateStatus('Enter the ESP32 address first', 'error');
                 startBtn.disabled = false;
                 stopBtn.disabled = true;
                 return;
@@ -779,12 +779,12 @@
             ws.binaryType = 'arraybuffer';
             ws.onopen = () => {
                 h264Log('WS open');
-                updateStatus('🔌 Connected, starting capture...', 'info');
+                updateStatus('Connected, starting capture...', 'info');
                 startH264Capture();
             };
             ws.onclose = (evt) => {
                 h264Log('WS closed, code=', evt.code, 'reason=', evt.reason || '(none)', 'wasClean=', evt.wasClean);
-                updateStatus('⏹️ Disconnected', 'info');
+                updateStatus('Disconnected', 'info');
                 stopH264Streaming();
                 activeMode = null;
                 applyModeUI();
@@ -874,14 +874,14 @@
                 h264LastReadWallTime = null;
                 if (h264StatsTimer) clearInterval(h264StatsTimer);
                 h264StatsTimer = setInterval(updateH264Status, H264_STATS_UPDATE_INTERVAL_MS);
-                updateStatus('✅ Streaming active', 'success');
+                updateStatus('Streaming active', 'success');
                 streaming = true;
                 h264Log(`config: ${h264DetectedWidth}x${h264DetectedHeight} @ requested ${fps}fps, keyframe every ${H264_KEYFRAME_INTERVAL_MS}ms, ` +
                     `ignoreAcks=${h264IgnoreAcks}, maxInFlight=${h264MaxInFlight}, stall timeout ${H264_STALL_TIMEOUT_MS}ms`);
                 readH264Frames(reader);
             } catch (err) {
                 console.error('Failed to start capture:', err);
-                updateStatus('❌ Failed to start: ' + err.message, 'error');
+                updateStatus('Failed to start: ' + err.message, 'error');
                 stopH264Streaming();
                 activeMode = null;
                 applyModeUI();
@@ -954,7 +954,7 @@
             h264InFlight = [];
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            updateStatus('⏹️ Streaming stopped', 'info');
+            updateStatus('Streaming stopped', 'info');
         }
 
         // ============================================================
