@@ -193,6 +193,17 @@
                     <input type="number" id="h264FpsInput" value="5" min="1" max="60">
                 </div>
                 <div>
+                    <label>Bitrate (kbps):</label>
+                    <input type="number" id="h264BitrateInput" value="700" min="50" max="5000">
+                </div>
+                <div>
+                    <label>Bitrate mode:</label>
+                    <select id="h264BitrateModeSelect">
+                        <option value="constant" selected>Constant - steady bandwidth</option>
+                        <option value="variable">Variable - cheaper when mostly static</option>
+                    </select>
+                </div>
+                <div>
                     <label>Frames in flight:</label>
                     <select id="maxInFlightSelect">
                         <option value="1" selected>1 - lowest latency</option>
@@ -279,6 +290,8 @@
 
         // ---- H264-mode DOM refs ----
         const h264FpsInput = document.getElementById('h264FpsInput');
+        const h264BitrateInput = document.getElementById('h264BitrateInput');
+        const h264BitrateModeSelect = document.getElementById('h264BitrateModeSelect');
         const maxInFlightSelect = document.getElementById('maxInFlightSelect');
         const ignoreAcksCheckbox = document.getElementById('ignoreAcksCheckbox');
 
@@ -729,9 +742,27 @@
         let h264LastFrameTimestamp = null;
         let h264LastReadWallTime = null;
 
-        // All three of these can be changed live, mid-stream - readH264Frames() below
-        // reads h264IgnoreAcks/h264MaxInFlight fresh every frame, and FPS is re-applied
-        // to the live capture track via applyConstraints() rather than needing a restart.
+        // width/height must match the device's actual detected panel size
+        // (h264DetectedWidth/Height, from /boardinfo - see detectBoardConfig())
+        // since the decode buffer in webH264.cpp is allocated to fit exactly it.
+        function buildH264EncoderConfig() {
+            const bitrateKbps = Math.max(50, parseInt(h264BitrateInput.value, 10) || 700);
+            return {
+                codec: 'avc1.42E01E',   // H.264 constrained baseline, the profile the
+                                         // ESP32 SW decoder supports
+                width: h264DetectedWidth,
+                height: h264DetectedHeight,
+                bitrate: bitrateKbps * 1000,
+                bitrateMode: h264BitrateModeSelect.value,
+                latencyMode: 'realtime',
+                avc: { format: 'annexb' }
+            };
+        }
+
+        // All five of these can be changed live, mid-stream - readH264Frames() below
+        // reads h264IgnoreAcks/h264MaxInFlight fresh every frame, FPS is re-applied to
+        // the live capture track via applyConstraints(), and bitrate/bitrateMode are
+        // re-applied to the encoder via configure() - none need restarting capture.
         maxInFlightSelect.addEventListener('change', () => {
             h264MaxInFlight = Math.max(1, parseInt(maxInFlightSelect.value, 10) || 1);
             h264Log(`frames-in-flight changed live to ${h264MaxInFlight}`);
@@ -753,6 +784,17 @@
                 h264Log('WARN: live FPS change rejected by the browser/OS', err);
             }
         });
+        function reconfigureH264Encoder() {
+            if (!h264Encoder || h264Encoder.state !== 'configured') return;
+            try {
+                h264Encoder.configure(buildH264EncoderConfig());
+                h264Log(`encoder reconfigured: bitrate=${h264BitrateInput.value}kbps mode=${h264BitrateModeSelect.value}`);
+            } catch (err) {
+                h264Log('WARN: live bitrate/mode change rejected by the browser', err);
+            }
+        }
+        h264BitrateInput.addEventListener('change', reconfigureH264Encoder);
+        h264BitrateModeSelect.addEventListener('change', reconfigureH264Encoder);
 
         function h264Log(...args) {
             const t = h264StreamStartTime ? (performance.now() - h264StreamStartTime).toFixed(1) : '0.0';
@@ -850,19 +892,7 @@
                     }
                 });
 
-                // width/height here must match the device's actual detected panel size
-                // (h264DetectedWidth/Height, from /boardinfo - see detectBoardConfig())
-                // since the decode buffer in webH264.cpp is allocated to fit exactly it.
-                h264Encoder.configure({
-                    codec: 'avc1.42E01E',   // H.264 constrained baseline, the profile the
-                                             // ESP32 SW decoder supports
-                    width: h264DetectedWidth,
-                    height: h264DetectedHeight,
-                    bitrate: 700_000,
-                    bitrateMode: 'constant',
-                    latencyMode: 'realtime',
-                    avc: { format: 'annexb' }
-                });
+                h264Encoder.configure(buildH264EncoderConfig());
 
                 h264StreamStartTime = performance.now();
                 h264LastKeyframeAt = 0;
@@ -876,7 +906,8 @@
                 h264StatsTimer = setInterval(updateH264Status, H264_STATS_UPDATE_INTERVAL_MS);
                 updateStatus('Streaming active', 'success');
                 streaming = true;
-                h264Log(`config: ${h264DetectedWidth}x${h264DetectedHeight} @ requested ${fps}fps, keyframe every ${H264_KEYFRAME_INTERVAL_MS}ms, ` +
+                h264Log(`config: ${h264DetectedWidth}x${h264DetectedHeight} @ requested ${fps}fps, ` +
+                    `bitrate=${h264BitrateInput.value}kbps (${h264BitrateModeSelect.value}), keyframe every ${H264_KEYFRAME_INTERVAL_MS}ms, ` +
                     `ignoreAcks=${h264IgnoreAcks}, maxInFlight=${h264MaxInFlight}, stall timeout ${H264_STALL_TIMEOUT_MS}ms`);
                 readH264Frames(reader);
             } catch (err) {
@@ -1040,6 +1071,18 @@
                 const fps = parseInt(urlParams.get('h264Fps'));
                 if (!isNaN(fps) && fps >= 1 && fps <= 60) {
                     h264FpsInput.value = fps;
+                }
+            }
+            if (urlParams.has('h264Bitrate')) {
+                const kbps = parseInt(urlParams.get('h264Bitrate'));
+                if (!isNaN(kbps) && kbps >= 50 && kbps <= 5000) {
+                    h264BitrateInput.value = kbps;
+                }
+            }
+            if (urlParams.has('h264BitrateMode')) {
+                const v = urlParams.get('h264BitrateMode');
+                if (v === 'constant' || v === 'variable') {
+                    h264BitrateModeSelect.value = v;
                 }
             }
             if (urlParams.has('maxInFlight')) {

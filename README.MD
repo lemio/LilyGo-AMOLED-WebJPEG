@@ -167,6 +167,11 @@ Datasheets: [ESP32S3-R8](https://www.espressif.com.cn/en/support/documents/techn
 [AXP2101 (PMU)](https://github.com/lewisxhe/XPowersLib/blob/master/datasheet/AXP2101_Datasheet_V1.0_en.pdf),
 [CM32181 (light sensor)](https://github.com/lewisxhe/SensorLib/blob/master/datasheet/CM32181A3OP.pdf).
 
+## Learnings
+
+[learnings.md](./learnings.md) covers non-obvious decisions and bugs found while
+building this repo - useful if you're extending it or hit something similar.
+
 ## License
 
 MIT - see [LICENSE](./LICENSE). Built on

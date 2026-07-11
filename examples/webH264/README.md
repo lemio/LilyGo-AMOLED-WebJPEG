@@ -75,19 +75,25 @@ environment name is `webH264`.
 ## Options in stream.html
 
 Once [stream.html](../stream.html) detects a webH264 board (or you force "Mode: Force
-WebH264"), it shows (all three adjustable live, mid-stream):
+WebH264"), it shows (all adjustable live, mid-stream, except Resolution):
 
 - **Resolution** - auto-filled from `/boardinfo` once the board is detected, not
   user-editable (see "Board support" above).
 - **Capture FPS** - how fast the browser asks the OS to capture frames. Changing this
   live re-applies the constraint to the active capture track (`applyConstraints()`);
   the browser/OS may not always honor it.
+- **Bitrate** - target encoder bitrate in kbps. Lower means smaller, cheaper-to-decode
+  frames (see "Tuning bitrate for screen content" below) at the cost of image quality.
+- **Bitrate mode** - Constant keeps bitrate steady regardless of content. Variable lets
+  the encoder use very few bits (and produce cheap-to-decode frames) when the screen
+  isn't changing, and more only when it is - a better fit for typical screen content.
 - **Frames in flight** - how many un-acked frames the browser allows outstanding at
   once (see "Flow control" below).
 - **Ignore device acks** - disables flow control entirely.
 
 `stream.html` also accepts URL query parameters for bookmarking a specific setup:
-`espAddress`, `mode=h264`, `h264Fps` (1-60), `maxInFlight` (`1`/`2`), `ignoreAcks`
+`espAddress`, `mode=h264`, `h264Fps` (1-60), `h264Bitrate` (kbps, 50-5000),
+`h264BitrateMode` (`constant`/`variable`), `maxInFlight` (`1`/`2`), `ignoreAcks`
 (`true`/`false`).
 
 ## Why this needs its own env
@@ -159,8 +165,33 @@ profile mandates no B-frames/CAVLC anyway.
 
 If you want a higher frame rate than the T4-S3's 600x450 gives you, the 1.47"/1.91"
 boards' smaller panels (see "Board support" above) get you that automatically, since
-resolution is now auto-detected rather than a constant to hand-edit - decoder tuning
-has comparatively little effect next to pixel count.
+resolution is now auto-detected rather than a constant to hand-edit. Resolution is the
+biggest lever, but bitrate and keyframe interval matter too - see below.
+
+## Tuning bitrate for screen content
+
+Software H.264 decode cost isn't just resolution - it also scales with how much
+residual data there is to entropy-decode per frame, which is directly a function of
+bitrate. This example's own per-frame timing log (see "Technical notes" below) shows
+it directly: a 1038-byte frame decoded in 188ms, a 6392-byte frame at the same
+resolution took 280ms. Smaller encoded frames decode faster.
+
+Screen content (flat colors, sharp edges, large static regions) compresses very well,
+so you can usually drop **Bitrate** well below the 700kbps default with little visible
+quality loss - try 200-300kbps first. **Bitrate mode: Variable** helps further: H.264
+can encode an unchanged region as a "skip" macroblock - no residual, no transform, just
+a cheap copy from the previous frame - and Variable bitrate lets the encoder actually
+use that saving (fewer bits, faster decode) instead of spending a steady bit budget on
+content that didn't need it. This matches "lots of pixels stay the same color, only a
+small area changes" (typical UI/screen content) far better than Constant bitrate does.
+
+Keyframes are the other lever, indirectly: every macroblock in a keyframe is
+intra-predicted and fully reconstructed from scratch - there's no cheap "skip" path
+like inter-predicted frames have. `stream.html` forces one every
+`KEYFRAME_INTERVAL_MS` (2000ms), mainly so a struggling connection can resync. Since
+this app only ever has one viewer, whose decoder is reset on every new connection
+(`h264_decode_reset()` in `webH264.cpp`), that safety margin is the main thing forced
+keyframes buy here - there's no multi-viewer late-join scenario to support.
 
 ## Troubleshooting
 
