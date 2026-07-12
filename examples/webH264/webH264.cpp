@@ -41,8 +41,8 @@ extern "C" {
 // flasher or before compiling) - see examples/webJPEG/webJPEG.cpp for the full
 // explanation of this placeholder convention. mdnsName's default value is itself both a
 // working hostname AND the flasher's search key, matching webJPEG's convention.
-const char ssid[100] = "Geerts huis";
-const char password[100] = "dimislief";
+const char ssid[100] = "|*S*|";
+const char password[100] = "|*P*|";
 const char mdnsName[100] = "esp-webh264";
 
 // Shown as a QR code so the user can find help/docs if WiFi connection fails
