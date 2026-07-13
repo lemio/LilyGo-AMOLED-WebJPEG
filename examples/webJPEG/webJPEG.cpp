@@ -6,8 +6,8 @@
  * @date      2023-06-14
  * @note      Streams a browser tab, window, or camera to the AMOLED display over WiFi.
  *            This is plain WebSocket + MJPEG (canvas.toBlob), not the WebRTC protocol -
- *            no RTCPeerConnection/SDP/ICE. Optimized for maximum performance with
- *            direct rendering.
+ *            no RTCPeerConnection/SDP/ICE. Frames always render into a sprite buffer
+ *            and reach the display in one push - see drawJPEG()'s comments for why.
  *
  * Required libraries:
  * - ESPAsyncWebServer: https://github.com/me-no-dev/ESPAsyncWebServer
@@ -51,31 +51,52 @@ volatile uint8_t* frameBuffer = nullptr;
 volatile size_t frameSize = 0;
 volatile bool newFrameAvailable = false;
 volatile bool isMonochrome = false;
+// millis() when the first byte of the frame currently in frameBuffer arrived (set at
+// WS_EVT_DATA's info->index==0) - handed off under frameMutex alongside frameBuffer so
+// it reflects the frame loop() is about to render, not whatever message the WebSocket
+// handler has started assembling since. Lets drawJPEG()/drawMonoJPEG() report a "Recv"
+// duration covering network + reassembly time, not just their own decode/render work -
+// see learnings.md for why that gap needed a name.
+volatile uint32_t frameRecvTimestamp = 0;
 SemaphoreHandle_t frameMutex;
+
+// frameBuffer, wsAssemblyBuffer and wsMonoAssemblyBuffer are all allocated once from
+// PSRAM in setup() and reused for the life of the program - never malloc()/free()'d
+// per frame. No two frames compress to the same JPEG byte count, so allocating a
+// fresh buffer for every one of them makes the heap a moving target; over a long
+// enough streaming session that fragments badly enough for an allocation to fail,
+// which previously took the whole board down (a wedged async_tcp task, then a
+// watchdog reset). A fixed-size pool sidesteps that: oversized frames are dropped
+// instead of allocated for, and everything else copies into buffers whose addresses
+// never change. Mirrors webH264.cpp's wsAssemblyBuf for the same reason.
+static const size_t MAX_FRAME_SIZE = 512 * 1024;
 
 // Reassembles fragmented WebSocket frames before they're handed off above
 uint8_t* wsAssemblyBuffer = nullptr;
 size_t wsAssemblySize = 0;
 size_t wsExpectedSize = 0;
+uint32_t wsRecvStartMs = 0; // millis() at this message's first fragment (info->index==0)
 
 uint8_t* wsMonoAssemblyBuffer = nullptr;
 size_t wsMonoAssemblySize = 0;
 size_t wsMonoExpectedSize = 0;
+uint32_t wsMonoRecvStartMs = 0;
 
 volatile uint32_t frameCount = 0;
 volatile uint32_t lastFrameTime = 0;
 
-inline void swapBytes(uint16_t *data, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        data[i] = (data[i] >> 8) | (data[i] << 8);
-    }
-}
+// Per-frame timings look consistently good in isolation - what they hide is the gap
+// *between* lines, which is where a stall, a WiFi hiccup, or the runup to a crash
+// actually shows up. Prefixing every diagnostic line with device uptime makes those
+// gaps visible directly in the log instead of having to guess from context.
+#define LOGF(fmt, ...) Serial.printf("[%10lu] " fmt, millis(), ##__VA_ARGS__)
+#define LOGLN(msg) Serial.printf("[%10lu] " msg "\n", millis())
 
-void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
+void drawJPEG(uint8_t *jpegData, size_t jpegSize, uint32_t recvStartMs) {
     uint32_t t1 = millis();
 
     if (!JpegDec.decodeArray(jpegData, jpegSize)) {
-        Serial.println("JPEG decode failed!");
+        LOGF("JPEG decode failed! (Recv=%lums)\n", t1 - recvStartMs);
         return;
     }
 
@@ -85,18 +106,25 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
     uint16_t h = JpegDec.height;
 
     if (w == 0 || h == 0) {
-        Serial.println("Invalid JPEG dimensions!");
+        LOGLN("Invalid JPEG dimensions!");
         return;
     }
 
-    // Pushed straight to the display if the JPEG already matches its size, otherwise
-    // rendered into a sprite and centered.
+    // True when the JPEG already matches the display size exactly - still worth
+    // knowing (a mismatch means the image is being centered/letterboxed), but no
+    // longer changes how rendering happens: every frame renders into the sprite and
+    // reaches the display in a single push (see the Push step below), rather than the
+    // old per-MCU-block direct-to-display path, which was both the dominant cost
+    // (many small display-bus transactions) and produced a visible top-to-bottom
+    // "unrolling" effect as blocks landed on screen one at a time.
     bool directRender = (w == WIDTH && h == HEIGHT);
 
-    Serial.printf("JPEG: %dx%d | Display: %dx%d | Direct: %s | MCU: %dx%d\n",
-                  w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO",
-                  JpegDec.MCUWidth, JpegDec.MCUHeight);
+    LOGF("JPEG: %dx%d | Display: %dx%d | Direct: %s | MCU: %dx%d\n",
+         w, h, WIDTH, HEIGHT, directRender ? "YES" : "NO",
+         JpegDec.MCUWidth, JpegDec.MCUHeight);
 
+    // Skippable when directRender: every display pixel gets overwritten by the MCU
+    // loop below, so there's nothing left for stale sprite content to show through.
     if (!directRender) {
         spr.fillSprite(TFT_BLACK);
     }
@@ -111,6 +139,13 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
 
     uint32_t t3 = millis();
 
+    // This loop runs ~500 iterations back-to-back with no yield, which was suspected
+    // (see learnings.md) of starving the WiFi/TCP stack's own task long enough to
+    // delay ACK generation and trigger sender-side retransmission backoff - stalls of
+    // hundreds of ms to over a second, invisible in this function's own timing because
+    // they happen *before* a frame gets here, not during it. taskYIELD() every 64
+    // blocks gives that task a chance to run without the fixed-delay cost of delay().
+    uint16_t mcuCount = 0;
     while (JpegDec.read()) {
         uint16_t *pImg = JpegDec.pImage;
 
@@ -138,50 +173,41 @@ void drawJPEG(uint8_t *jpegData, size_t jpegSize) {
         }
         if (render_w == 0 || render_h == 0) continue;
 
-        // Edge blocks need only their valid portion copied out of the MCU buffer.
-        // Byte-swap only for direct rendering - the sprite path swaps internally.
+        // Edge blocks need only their valid portion copied out of the MCU buffer -
+        // spr.pushImage() byte-swaps internally, so no manual swap needed here.
         if (render_w != mcu_w || render_h != mcu_h) {
             uint16_t tempBuffer[render_w * render_h];
             for (uint16_t row = 0; row < render_h; row++) {
                 for (uint16_t col = 0; col < render_w; col++) {
-                    uint16_t pixel = pImg[row * mcu_w + col];
-                    tempBuffer[row * render_w + col] = directRender ? ((pixel >> 8) | (pixel << 8)) : pixel;
+                    tempBuffer[row * render_w + col] = pImg[row * mcu_w + col];
                 }
             }
-
-            if (directRender) {
-                amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
-            }
+            spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
         } else {
-            if (directRender) {
-                swapBytes(pImg, mcu_w * mcu_h);
-                amoled.pushColors(destX, destY, render_w, render_h, pImg);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, pImg);
-            }
+            spr.pushImage(destX, destY, render_w, render_h, pImg);
+        }
+
+        if (++mcuCount % 64 == 0) {
+            taskYIELD();
         }
     }
 
     uint32_t t4 = millis();
 
-    if (!directRender) {
-        amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
-    }
+    amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
 
     uint32_t t5 = millis();
 
-    Serial.printf("Timing: Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
-                  t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
+    LOGF("Timing: Recv=%lums | Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
+         t1 - recvStartMs, t2-t1, t3-t2, t4-t3, t5-t4, t5-recvStartMs);
 }
 
-void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
+void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize, uint32_t recvStartMs) {
     uint32_t t1 = millis();
 
     // Decode JPEG (grayscale)
     if (!JpegDec.decodeArray(jpegData, jpegSize)) {
-        Serial.println("Mono JPEG decode failed!");
+        LOGF("Mono JPEG decode failed! (Recv=%lums)\n", t1 - recvStartMs);
         return;
     }
 
@@ -191,11 +217,11 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
     uint16_t h = JpegDec.height;
 
     if (w == 0 || h == 0) {
-        Serial.println("Invalid JPEG dimensions!");
+        LOGLN("Invalid JPEG dimensions!");
         return;
     }
 
-    Serial.printf("Mono JPEG: %dx%d | Display: %dx%d\n", w, h, WIDTH, HEIGHT);
+    LOGF("Mono JPEG: %dx%d | Display: %dx%d\n", w, h, WIDTH, HEIGHT);
 
     bool directRender = (w == WIDTH && h == HEIGHT);
 
@@ -213,6 +239,8 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
 
     uint32_t t3 = millis();
 
+    // See the comment on drawJPEG()'s identical loop for why this yields periodically.
+    uint16_t mcuCount = 0;
     while (JpegDec.read()) {
         uint16_t *pImg = JpegDec.pImage;
 
@@ -235,40 +263,32 @@ void drawMonoJPEG(uint8_t *jpegData, size_t jpegSize) {
             render_h = HEIGHT - destY;
         }
 
+        // spr.pushImage() byte-swaps internally, so no manual swap needed here.
         if (render_w != mcu_w || render_h != mcu_h) {
             uint16_t tempBuffer[render_w * render_h];
             for (uint16_t row = 0; row < render_h; row++) {
                 for (uint16_t col = 0; col < render_w; col++) {
-                    uint16_t pixel = pImg[row * mcu_w + col];
-                    tempBuffer[row * render_w + col] = directRender ? ((pixel >> 8) | (pixel << 8)) : pixel;
+                    tempBuffer[row * render_w + col] = pImg[row * mcu_w + col];
                 }
             }
-
-            if (directRender) {
-                amoled.pushColors(destX, destY, render_w, render_h, tempBuffer);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
-            }
+            spr.pushImage(destX, destY, render_w, render_h, tempBuffer);
         } else {
-            if (directRender) {
-                swapBytes(pImg, render_w * render_h);
-                amoled.pushColors(destX, destY, render_w, render_h, pImg);
-            } else {
-                spr.pushImage(destX, destY, render_w, render_h, pImg);
-            }
+            spr.pushImage(destX, destY, render_w, render_h, pImg);
+        }
+
+        if (++mcuCount % 64 == 0) {
+            taskYIELD();
         }
     }
 
     uint32_t t4 = millis();
 
-    if (!directRender) {
-        amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
-    }
+    amoled.pushColors(0, 0, WIDTH, HEIGHT, (uint16_t *)spr.getPointer());
 
     uint32_t t5 = millis();
 
-    Serial.printf("Mono Timing: Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
-                  t2-t1, t3-t2, t4-t3, t5-t4, t5-t1);
+    LOGF("Mono Timing: Recv=%lums | Decode=%lums | Setup=%lums | Render=%lums | Push=%lums | Total=%lums\n",
+         t1 - recvStartMs, t2-t1, t3-t2, t4-t3, t5-t4, t5-recvStartMs);
 }
 
 // Renders `text` as a QR code into the sprite, centered at (centerX, centerY),
@@ -437,62 +457,51 @@ void setupWebServer() {
     ws.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client,
                    AwsEventType type, void *arg, uint8_t *data, size_t len) {
         if (type == WS_EVT_CONNECT) {
-            Serial.printf("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+            LOGF("WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
         } else if (type == WS_EVT_DISCONNECT) {
-            Serial.printf("WebSocket client #%u disconnected\n", client->id());
-            if (wsAssemblyBuffer) {
-                free(wsAssemblyBuffer);
-                wsAssemblyBuffer = nullptr;
-                wsAssemblySize = 0;
-            }
+            LOGF("WebSocket client #%u disconnected\n", client->id());
+            wsAssemblySize = 0;
+            wsExpectedSize = 0;
         } else if (type == WS_EVT_DATA) {
             AwsFrameInfo *info = (AwsFrameInfo*)arg;
 
             // Only binary frames (JPEG images) carry a video frame
-            if (info->opcode == WS_BINARY || info->opcode == WS_CONTINUATION) {
+            if (info->opcode != WS_BINARY && info->opcode != WS_CONTINUATION) {
+                return;
+            }
 
-                if (info->index == 0) {
-                    wsExpectedSize = info->len;
-                    wsAssemblySize = 0;
+            if (info->len > MAX_FRAME_SIZE) {
+                LOGF("Dropping oversized WS message: %llu bytes\n", (unsigned long long)info->len);
+                return;
+            }
 
-                    if (wsAssemblyBuffer) {
-                        free(wsAssemblyBuffer);
-                        wsAssemblyBuffer = nullptr;
-                    }
+            if (info->index == 0) {
+                wsExpectedSize = info->len;
+                wsAssemblySize = 0;
+                wsRecvStartMs = millis();
+            }
 
-                    wsAssemblyBuffer = (uint8_t*)malloc(wsExpectedSize);
-                    if (!wsAssemblyBuffer) {
-                        Serial.printf("Malloc failed for %u bytes!\n", wsExpectedSize);
-                        return;
-                    }
-                }
+            if (info->index + len > wsExpectedSize || info->index + len > MAX_FRAME_SIZE) {
+                return;
+            }
 
-                if (wsAssemblyBuffer && (wsAssemblySize + len <= wsExpectedSize)) {
-                    memcpy(wsAssemblyBuffer + wsAssemblySize, data, len);
-                    wsAssemblySize += len;
-                }
+            memcpy(wsAssemblyBuffer + info->index, data, len);
+            wsAssemblySize += len;
 
-                if (info->final && wsAssemblySize == wsExpectedSize) {
-                    if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
-                        if (frameBuffer) {
-                            free((void*)frameBuffer);
-                        }
+            if (!info->final || wsAssemblySize != wsExpectedSize) {
+                return;
+            }
 
-                        // Ownership of wsAssemblyBuffer transfers to frameBuffer
-                        frameBuffer = (volatile uint8_t*)wsAssemblyBuffer;
-                        frameSize = wsAssemblySize;
-                        newFrameAvailable = true;
-                        wsAssemblyBuffer = nullptr;
-                        wsAssemblySize = 0;
+            if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
+                memcpy((void*)frameBuffer, wsAssemblyBuffer, wsAssemblySize);
+                frameSize = wsAssemblySize;
+                newFrameAvailable = true;
+                isMonochrome = false;
+                frameRecvTimestamp = wsRecvStartMs;
 
-                        xSemaphoreGive(frameMutex);
-                    } else {
-                        Serial.println("Mutex busy - frame dropped");
-                        free(wsAssemblyBuffer);
-                        wsAssemblyBuffer = nullptr;
-                        wsAssemblySize = 0;
-                    }
-                }
+                xSemaphoreGive(frameMutex);
+            } else {
+                LOGF("Mutex busy - frame dropped (Recv=%lums)\n", (uint32_t)(millis() - wsRecvStartMs));
             }
         }
     });
@@ -502,62 +511,50 @@ void setupWebServer() {
     wsMono.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client,
                        AwsEventType type, void *arg, uint8_t *data, size_t len) {
         if (type == WS_EVT_CONNECT) {
-            Serial.printf("Mono WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
+            LOGF("Mono WebSocket client #%u connected from %s\n", client->id(), client->remoteIP().toString().c_str());
         } else if (type == WS_EVT_DISCONNECT) {
-            Serial.printf("Mono WebSocket client #%u disconnected\n", client->id());
-            if (wsMonoAssemblyBuffer) {
-                free(wsMonoAssemblyBuffer);
-                wsMonoAssemblyBuffer = nullptr;
-                wsMonoAssemblySize = 0;
-            }
+            LOGF("Mono WebSocket client #%u disconnected\n", client->id());
+            wsMonoAssemblySize = 0;
+            wsMonoExpectedSize = 0;
         } else if (type == WS_EVT_DATA) {
             AwsFrameInfo *info = (AwsFrameInfo*)arg;
 
-            if (info->opcode == WS_BINARY || info->opcode == WS_CONTINUATION) {
+            if (info->opcode != WS_BINARY && info->opcode != WS_CONTINUATION) {
+                return;
+            }
 
-                if (info->index == 0) {
-                    wsMonoExpectedSize = info->len;
-                    wsMonoAssemblySize = 0;
+            if (info->len > MAX_FRAME_SIZE) {
+                LOGF("Dropping oversized mono WS message: %llu bytes\n", (unsigned long long)info->len);
+                return;
+            }
 
-                    if (wsMonoAssemblyBuffer) {
-                        free(wsMonoAssemblyBuffer);
-                        wsMonoAssemblyBuffer = nullptr;
-                    }
+            if (info->index == 0) {
+                wsMonoExpectedSize = info->len;
+                wsMonoAssemblySize = 0;
+                wsMonoRecvStartMs = millis();
+            }
 
-                    wsMonoAssemblyBuffer = (uint8_t*)malloc(wsMonoExpectedSize);
-                    if (!wsMonoAssemblyBuffer) {
-                        Serial.printf("Mono malloc failed for %u bytes!\n", wsMonoExpectedSize);
-                        return;
-                    }
-                }
+            if (info->index + len > wsMonoExpectedSize || info->index + len > MAX_FRAME_SIZE) {
+                return;
+            }
 
-                if (wsMonoAssemblyBuffer && (wsMonoAssemblySize + len <= wsMonoExpectedSize)) {
-                    memcpy(wsMonoAssemblyBuffer + wsMonoAssemblySize, data, len);
-                    wsMonoAssemblySize += len;
-                }
+            memcpy(wsMonoAssemblyBuffer + info->index, data, len);
+            wsMonoAssemblySize += len;
 
-                if (info->final && wsMonoAssemblySize == wsMonoExpectedSize) {
-                    if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
-                        if (frameBuffer) {
-                            free((void*)frameBuffer);
-                        }
+            if (!info->final || wsMonoAssemblySize != wsMonoExpectedSize) {
+                return;
+            }
 
-                        frameBuffer = (volatile uint8_t*)wsMonoAssemblyBuffer;
-                        frameSize = wsMonoAssemblySize;
-                        newFrameAvailable = true;
-                        isMonochrome = true;
+            if (xSemaphoreTake(frameMutex, 0) == pdTRUE) {
+                memcpy((void*)frameBuffer, wsMonoAssemblyBuffer, wsMonoAssemblySize);
+                frameSize = wsMonoAssemblySize;
+                newFrameAvailable = true;
+                isMonochrome = true;
+                frameRecvTimestamp = wsMonoRecvStartMs;
 
-                        wsMonoAssemblyBuffer = nullptr;
-                        wsMonoAssemblySize = 0;
-
-                        xSemaphoreGive(frameMutex);
-                    } else {
-                        Serial.println("Mono mutex busy - dropped");
-                        free(wsMonoAssemblyBuffer);
-                        wsMonoAssemblyBuffer = nullptr;
-                        wsMonoAssemblySize = 0;
-                    }
-                }
+                xSemaphoreGive(frameMutex);
+            } else {
+                LOGF("Mono mutex busy - dropped (Recv=%lums)\n", (uint32_t)(millis() - wsMonoRecvStartMs));
             }
         }
     });
@@ -566,19 +563,19 @@ void setupWebServer() {
 
 
     server.begin();
-    Serial.println("Web server started");
+    LOGLN("Web server started");
 }
 
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("Starting webJPEG display...");
+    LOGLN("Starting webJPEG display...");
 
     delay(3000);
 
     if (!amoled.begin()) {
         while (1) {
-            Serial.println("Display init failed!");
+            LOGLN("Display init failed!");
             delay(1000);
         }
     }
@@ -587,6 +584,18 @@ void setup()
     spr.setSwapBytes(true);
 
     frameMutex = xSemaphoreCreateMutex();
+
+    // See the comment above MAX_FRAME_SIZE for why these are allocated once here
+    // instead of per-frame.
+    wsAssemblyBuffer = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM);
+    wsMonoAssemblyBuffer = (uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM);
+    frameBuffer = (volatile uint8_t*)heap_caps_malloc(MAX_FRAME_SIZE, MALLOC_CAP_SPIRAM);
+    if (!wsAssemblyBuffer || !wsMonoAssemblyBuffer || !frameBuffer) {
+        while (1) {
+            LOGLN("Frame buffer allocation failed!");
+            delay(1000);
+        }
+    }
 
     spr.fillSprite(TFT_BLACK);
     spr.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -617,18 +626,17 @@ void loop()
                 uint8_t* bufPtr = (uint8_t*)frameBuffer;
                 size_t bufSize = frameSize;
                 bool isMono = isMonochrome;
+                uint32_t recvStartMs = frameRecvTimestamp;
 
                 if (isMono) {
-                    drawMonoJPEG(bufPtr, bufSize);
+                    drawMonoJPEG(bufPtr, bufSize, recvStartMs);
                 } else {
-                    drawJPEG(bufPtr, bufSize);
+                    drawJPEG(bufPtr, bufSize, recvStartMs);
                 }
 
                 frameCount++;
                 lastFrameTime = millis() - startTime;
 
-                free(bufPtr);
-                frameBuffer = nullptr;
                 frameSize = 0;
                 isMonochrome = false;
             }
@@ -642,7 +650,7 @@ void loop()
     unsigned long now = millis();
     if (now - lastCheck > 30000) {
         if (frameCount > 0) {
-            Serial.printf("Frames: %lu | Last: %lums\n", frameCount, lastFrameTime);
+            LOGF("Frames: %lu | Last: %lums\n", frameCount, lastFrameTime);
         }
         lastCheck = now;
     }

@@ -23,13 +23,16 @@ measured faster than webJPEG even on this software-only setup (see table below).
 | ---------- | ---------------------------------------------- | ---------------------------------------------------------------------------- |
 | Codec      | MJPEG (one JPEG per frame)                     | H.264 (WebCodecs `VideoEncoder`)                                             |
 | Boards     | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected)                               |
-| Frame rate | ~5.4fps measured on 1.91" (536x240)            | ~8.2fps measured on 1.91" (536x240)                                          |
+| Frame rate | ~5.9fps measured on 1.91" (536x240)            | ~8.2fps measured on 1.91" (536x240)                                          |
 | Bandwidth  | Higher for the same visual quality             | Much lower - H.264 compresses far better                                     |
 | Best for   | Simplicity - no codec tuning, works everywhere | Lower bandwidth and, on this hardware, a higher frame rate too               |
 
-Both numbers are real measurements on the same board, not estimates or theoretical
-maximums - see [webJPEG's](examples/webJPEG/README.md#measured-performance) and
+Both frame-rate numbers are real measurements on the same board, not estimates - see
+[webJPEG's](examples/webJPEG/README.md#measured-performance) and
 [webH264's](examples/webH264/README.md#measured-performance) READMEs for the full data.
+webJPEG previously had an open heap-fragmentation crash under sustained streaming;
+it's fixed (see webJPEG's README "Stability" note) but not yet re-verified against a
+real long-running reproduction.
 
 **Why H.264 tends to win here, structurally, not just in this one measurement:**
 webJPEG decodes every frame independently from scratch - a detailed, complex frame

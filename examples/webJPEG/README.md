@@ -40,32 +40,52 @@ issue with your board model and a serial log from boot.
 
 ## Measured performance
 
-Real numbers from the per-frame Serial log (see "Technical notes" below), not
-estimates - useful as a baseline for judging your own setup.
+Real numbers from the per-frame Serial log, same 1.91" board and content (screen
+share) as the H.264 comparison in the root README, measured after the rendering-path
+fix described in "Technical notes" below.
 
-| Board | Resolution | Avg decode | Avg render | Rendered-frame rate |
-| ----- | ---------- | ---------- | ---------- | -------------------- |
-| 1.91" | 536x240 | 1.6ms | 183ms | ~5.4fps |
+| Board | Resolution | Avg decode | Avg render | Avg push | Rendered-frame rate |
+| ----- | ---------- | ---------- | ---------- | -------- | -------------------- |
+| 1.91" | 536x240 | 1.1ms | 156.6ms | 11.4ms | ~5.9fps |
 
-(23 consecutive rendered frames, screen share content.)
+(67 consecutive rendered frames.)
 
-JPEG decode itself is cheap - the real cost is `Render`, which (for a frame matching
-the display size exactly, `Direct: YES` in the log) pushes each decoded 16x16 MCU block
-to the display individually as it's decoded: 34x15 = 510 `pushColors()` calls for
-536x240, averaging ~360 microseconds each. That's a lot of small display-bus
-transactions rather than one bulk transfer - see "Technical notes" below for how this
-differs from webH264's approach, which decodes the whole frame before a single
-`pushColors()` call.
+For comparison, before the fix this same board measured 183ms average render (pushing
+each decoded 16x16 MCU block to the display individually, 510 `pushColors()` calls per
+frame) and ~5.4fps. Buffering the whole frame into a sprite before a single bulk push
+removed the visible top-to-bottom "unrolling" render effect, and cut the frame-drop
+rate roughly in half (see below) - but barely moved the frame rate itself (~5.4fps to
+~5.9fps). That's the more interesting result: it means the 183ms was never really the
+cost of 510 small *display-bus* transactions, since replacing them with 510 in-RAM
+`spr.pushImage()` calls didn't recover that time either. The cost is dominated by
+making 510 separate calls at all - each with its own bounds-checking and byte-swap
+logic - not by where those calls send their data. A further speedup would mean fewer,
+larger copies per frame (e.g. decoding straight into the sprite's memory layout),
+not just picking a cheaper destination for the same number of calls.
 
 **The device has no flow control**, unlike webH264 (see that example's "Flow control"
-section). It just renders what it can and silently drops the rest: in the same
-session, 57 fully-received frames were dropped ("Mutex busy - frame dropped") against
-24 that got rendered - about 70% of everything the browser successfully encoded and
-sent was thrown away without ever reaching the screen, because the device was still
-busy rendering the previous frame. That's wasted browser-side encode CPU and network
-bandwidth for nothing. If you're seeing a lot of these in your own serial log, try
-lowering **Frame Rate** in stream.html closer to what "Rendered-frame rate" in the
-table above suggests your board can actually keep up with.
+section). It just renders what it can and silently drops the rest: in the measurement
+above, 31 fully-received frames were dropped ("Mutex busy - frame dropped") against 67
+that got rendered - about 32% of everything the browser successfully encoded and sent
+was thrown away without ever reaching the screen, because the device was still busy
+rendering the previous frame. Better than the ~70% drop rate measured before the fix
+(rendering finishes sooner, so fewer incoming frames arrive mid-render), but still
+wasted browser-side encode CPU and network bandwidth. If you're seeing a lot of these
+in your own serial log, try lowering **Frame Rate** in stream.html closer to what
+"Rendered-frame rate" in the table above suggests your board can actually keep up with.
+
+**Stability (fixed, pending re-verification on hardware):** sustained streaming used to
+eventually hit a burst of consecutive `JPEG decode failed!` errors, followed by a
+`Malloc failed for 0 bytes!` and a `task_wdt` abort/reboot on the `async_tcp` task. The
+suspected cause was internal-heap fragmentation: `webJPEG.cpp` used to `malloc()` a
+freshly-sized frame buffer for every incoming WebSocket frame and `free()` it right
+after, and no two frames compress to the same byte count, so hours of that made the
+heap a moving target until an allocation eventually failed. The fix - already applied,
+matching webH264's `wsAssemblyBuf` approach - allocates one fixed-size buffer per
+stream (`MAX_FRAME_SIZE`, 512KB) from PSRAM once at boot and reuses it for every frame;
+oversized frames are dropped instead of allocated for. Not yet re-verified against a
+real long-running crash reproduction - if you still hit a reboot after updating,
+please open an issue with a serial log from just before it happens.
 
 ## Using it
 
@@ -118,21 +138,24 @@ WebJPEG"), it shows:
   A high drop count ("Mutex busy - frame dropped" in the serial log) means the browser
   is sending faster than the device can render; lowering Frame Rate reduces wasted
   encode/network work even though the *rendered* rate is capped by the device either way.
+- **Reboots after streaming for a while, with `JPEG decode failed!` spam and a
+  `task_wdt`/`async_tcp` abort in the serial log beforehand:** should be fixed - see
+  "Stability" under "Measured performance" above. If you still see it after updating,
+  please open an issue with a serial log from just before the reboot.
 
 ## Technical notes
 
 - Every rendered frame logs a per-stage timing breakdown to Serial: `Decode` (JPEG
   decode itself, typically ~1-3ms - cheap), `Setup` (centering/offset math), `Render`
-  (pushing decoded pixels to the display - the dominant cost, see "Measured
-  performance" above), `Push` (bulk display push, only used when the frame doesn't
-  match the display size exactly and had to go through a sprite buffer - 0ms otherwise,
-  see below), and `Total`.
-- When the incoming JPEG exactly matches the display's resolution (`Direct: YES` in the
-  log), each decoded MCU block is pushed to the display individually as it's decoded
-  (many small `pushColors()` calls) rather than assembled into a full frame buffer
-  first - unlike webH264, which always decodes the whole frame before a single bulk
-  `pushColors()` call. This wasn't something either example was tuned against the
-  other for; it's just a real difference worth knowing if you're comparing the two.
+  (decoding MCU blocks into the sprite buffer), `Push` (one bulk `pushColors()` call
+  for the whole frame), and `Total`.
+- Every frame renders into a `TFT_eSprite` buffer and reaches the display in a single
+  bulk `pushColors()` call, whether or not the incoming JPEG matches the display's
+  resolution exactly - matching webH264's approach. This used to differ: when a frame
+  matched the display size exactly (`Direct: YES` in the log), each decoded 16x16 MCU
+  block was pushed to the display individually instead, which was both the dominant
+  per-frame cost and produced a visible top-to-bottom "unrolling" render effect. See
+  "Measured performance" above for the pre-fix numbers this replaced.
 - Board IDs returned by `amoled.getBoardID()` (see
   [LilyGo_AMOLED.h](../../src/LilyGo_AMOLED.h)):
   `LILYGO_AMOLED_147=1`, `LILYGO_AMOLED_191=2`, `LILYGO_AMOLED_241=3`,
@@ -148,3 +171,7 @@ WebJPEG"), it shows:
   display size. Served with `Access-Control-Allow-Origin: *` since the calling page is
   cross-origin (GitHub Pages, not the device) - safe here since every endpoint is
   read-only board/status info or the streaming WebSocket, nothing sensitive.
+- Incoming WebSocket frames are reassembled into a fixed-size PSRAM buffer
+  (`MAX_FRAME_SIZE`, 512KB) allocated once at boot, not `malloc()`/`free()`'d per
+  frame - see the "Stability" note under "Measured performance" above for why.
+  Frames larger than that are dropped rather than risking an allocation.

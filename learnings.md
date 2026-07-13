@@ -154,6 +154,113 @@ macroblocks - cost tracks how much *changed*, not how detailed the picture is. T
 the same "skip macroblock" mechanism behind the bitrate-tuning findings above, just
 framed as a comparison to webJPEG's lack of any equivalent.
 
+**The "line by line" render effect and the render bottleneck were the same bug.**
+webJPEG used to have two special-cased render paths in `drawJPEG()`/`drawMonoJPEG()`:
+when the incoming JPEG matched the display resolution exactly, each decoded 16x16 MCU
+block was pushed straight to the display as it came off the decoder; otherwise, frames
+went through a `TFT_eSprite` buffer and were pushed once. The direct-render path looked
+like an optimization (skip the buffer, skip a copy) but was actually the opposite: 510
+separate `pushColors()` calls for a 536x240 frame, at ~360us each, versus one bulk push
+for the whole frame - see "webJPEG's cheap decode doesn't mean a faster overall
+pipeline" above. It also visibly rendered top-to-bottom as blocks landed on screen one
+at a time, which is what prompted the question that led here. The fix removed the
+special case entirely: every frame now renders into the sprite and reaches the display
+in one push, matching webH264's approach, which never had this problem because
+`esp_h264`'s decoder only hands back whole frames anyway - it never had the *option* to
+push partial blocks. Lesson: a path that avoids an extra buffer copy isn't necessarily
+faster if it trades one bulk transfer for many small ones; measure the actual
+display-bus cost, not just the memory-copy cost you're trying to avoid.
+
+**Re-measured on real hardware: the drop rate improved a lot, the frame rate barely
+did.** Same 1.91" board, same content: render time went from 183ms to 156.6ms average
+(~5.4fps to ~5.9fps), while the frame-drop rate roughly halved (~70% to ~32% of
+received frames dropped). That gap between "small time improvement" and "big drop-rate
+improvement" makes sense once you separate the two: dropped frames happen when a new
+frame arrives *while* the device is still rendering the previous one, so shaving even
+~15% off render time meaningfully shrinks that window. But the *total* render time
+barely moved, which means the original 183ms was never really "510 small SPI/QSPI
+bus transactions are slow" - swapping those for 510 `spr.pushImage()` calls into RAM
+(same call count, cheaper destination) recovered almost none of it. The real cost is
+in making 510 separate calls at all: each one repeats bounds-checking and byte-swap
+logic that would only need to happen once per frame if the MCU blocks were assembled
+into the sprite's memory directly instead of going through the sprite's public
+per-block API 510 times. Lesson: when a "fix" doesn't produce the improvement you
+expected, don't assume it failed - check whether you fixed a different problem than
+the one you thought you were fixing (here: the visible line-by-line artifact and the
+drop rate, not raw decode throughput).
+
+**A sustained-streaming crash surfaced that the render-path fix didn't cause or fix.**
+After a period of successful streaming, real hardware testing hit a burst of
+`JPEG decode failed!` errors, then a `Malloc failed for 0 bytes!`, then a `task_wdt`
+abort on the `async_tcp` FreeRTOS task and a reboot. The shape of it - failures that
+start clean and cascade, ending in a zero-size allocation failure - pointed at
+internal-heap fragmentation: `webJPEG.cpp`'s WebSocket handler used to `malloc()` a
+freshly-sized `wsAssemblyBuffer` for every incoming frame and `free()` it right after,
+and different-sized allocations at a sustained rate are a classic way to fragment a
+heap even when nothing is technically leaked. `webH264.cpp` already avoided this
+(`wsAssemblyBuf`, allocated once at boot from PSRAM, reused for every message - see
+its comment for the same reasoning), which is also why it never showed this failure
+mode in testing despite doing conceptually the same job. Fixed by porting the same
+pattern to webJPEG: `wsAssemblyBuffer`, `wsMonoAssemblyBuffer` and `frameBuffer` are
+now fixed-size (`MAX_FRAME_SIZE`, 512KB) PSRAM buffers allocated once in `setup()`,
+never freed; oversized frames are dropped (checked against `info->len` before copying
+anything) instead of risking an allocation. The one behavior change this requires:
+`frameBuffer` used to change *which* allocation it pointed to every frame (ownership
+transferred from the WebSocket handler); now it's a fixed address that gets `memcpy`'d
+into under the same mutex, which costs a small fixed copy (tens of KB) in exchange for
+removing the allocation entirely. Not yet re-verified against a real long streaming
+session - the crash was intermittent under sustained load, so absence of a repeat in
+a short test wouldn't be strong evidence either way.
+
+**Per-frame logs need an absolute timestamp, not just relative deltas.** Every
+`Timing:`/`Frame #N:` line already broke down its own frame into Decode/Render/Push/etc,
+but nothing tied that line to wall-clock time - so a serial log full of clean-looking
+170ms frames gives no way to tell whether they arrived back-to-back or with multi-second
+gaps between them (a stall, a WiFi retry, the runup to the crash above). Reading a
+one-shot lastFrameTime figure or a burst of decode failures in isolation looked like
+"streaming is working fine, then instantly broke" - the missing dimension was how much
+real time separated any two lines. Both examples now prefix every diagnostic line with
+device uptime via a `LOGF`/`LOGLN` macro wrapping `Serial.printf`/`millis()` (see
+`webJPEG.cpp` and `webH264.cpp`) - cheap (`millis()` is a single counter read) and
+applied only to lines that already stood alone (frame timings, connect/disconnect,
+drops, fatal errors), not the multi-`Serial.print()` WiFi-connect screen, where a
+timestamp would land mid-sentence.
+
+**Once timestamped, webJPEG's real-world frame rate turned out much lower than the
+per-frame timings suggested - and the gap was invisible to the device's own
+instrumentation.** Real logs at both 5fps and 30fps targets showed frequent 400ms-1.25s
+silences between rendered frames, even though each frame's own Decode/Render/Push add
+up to only ~150ms - well under budget. The device is idle, not slow, during those
+gaps, which is exactly why `Timing:` never caught them: it only starts its clock once
+`drawJPEG()`/`drawMonoJPEG()` is called with a complete frame already in hand. Whatever
+happens before that (network transit, WebSocket reassembly, or the device simply not
+noticing yet) was completely unmeasured.
+
+Leading suspect: `drawJPEG()`'s MCU-copy loop ran ~500 `spr.pushImage()` calls back to
+back with no yield, holding `frameMutex` (and the CPU) for the entire ~150ms. AsyncTCP's
+own task has no fixed core affinity by default, so it can share a core with `loopTask` -
+and a core held solid for 150ms can delay that task long enough to delay TCP ACK
+generation. A sender not getting timely ACKs looks exactly like packet loss to a TCP
+stack, triggering retransmission backoff - and TCP's minimum RTO (commonly ~200ms,
+doubling per retry: 200/400/800/1600ms) lines up closely with the observed gap sizes.
+Two changes test and mitigate this without evidence of a different root cause yet:
+1. `Timing:`/`Mono Timing:` now include a `Recv=` figure - wall-clock time from the
+   first WebSocket fragment of a frame (`info->index==0`, timestamped in the
+   `WS_EVT_DATA` handler) to when `drawJPEG()` actually started decoding it. This
+   number, not `Total=`, is what will confirm or rule out the CPU-starvation theory:
+   if `Recv=` is what balloons during a stall, the delay is upstream of the device
+   even noticing a new frame; if `Total=`'s other fields balloon instead, it's
+   something in the render path itself.
+2. Both MCU-copy loops now call `taskYIELD()` every 64 blocks - lets the scheduler run
+   other ready tasks (like AsyncTCP's) without the fixed-delay cost of `delay()`/
+   `vTaskDelay()`, which would add real latency 8 times a frame for no benefit if the
+   scheduler had nothing else to do.
+
+Not yet confirmed on real hardware - this is a plausible, testable hypothesis backed by
+how the ESP32's task scheduling and TCP's RTO backoff both work, not a verified root
+cause. The next real log will show whether `Recv=` (not `Total=`) is where the gap time
+actually lives, and whether the periodic yield changed anything.
+
 ## General
 
 **Comments should describe the code as it is, not the story of how it got there.**

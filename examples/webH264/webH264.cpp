@@ -66,6 +66,14 @@ h264_decoder_t *decoder = NULL;
 TFT_eSPI tft;
 TFT_eSprite statusSpr = TFT_eSprite(&tft);
 
+// Per-frame timings (Recv/Decode/Push/etc.) look consistently good in isolation - what
+// they hide is the gap *between* lines, which is where a stall or a WiFi hiccup
+// actually shows up. Prefixing every diagnostic line with device uptime makes those
+// gaps visible directly in the log instead of having to guess from context. Mirrors
+// webJPEG.cpp's LOGF/LOGLN.
+#define LOGF(fmt, ...) Serial.printf("[%10lu] " fmt, millis(), ##__VA_ARGS__)
+#define LOGLN(msg) Serial.printf("[%10lu] " msg "\n", millis())
+
 // Renders `text` as a QR code into statusSpr, centered at (centerX, centerY),
 // scaled as large as possible within a maxSize x maxSize box. Mirrors
 // webJPEG.cpp's drawQRCode() exactly, so a failed WiFi connection looks and
@@ -79,7 +87,7 @@ static void drawQRCode(const char *text, int16_t centerX, int16_t centerY, int16
                                     qrcodegen_VERSION_MIN, QR_MAX_VERSION,
                                     qrcodegen_Mask_AUTO, true);
     if (!ok) {
-        Serial.println("QR code generation failed!");
+        LOGLN("QR code generation failed!");
         return;
     }
 
@@ -229,7 +237,7 @@ static void setupWebServer() {
     });
 
     server.begin();
-    Serial.println("Web server started");
+    LOGLN("Web server started");
 }
 
 // AsyncWebSocket delivers large messages (e.g. a keyframe chunk with
@@ -252,7 +260,7 @@ static uint32_t frameCount = 0;
 static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
                        void *arg, uint8_t *data, size_t len) {
   if (type == WS_EVT_CONNECT) {
-    Serial.printf("Client connected from %s\n", client->remoteIP().toString().c_str());
+    LOGF("Client connected from %s\n", client->remoteIP().toString().c_str());
     // A fresh SPS/PPS/IDR sequence landing on an already-active decode
     // session (e.g. a browser reconnect) can crash the underlying tinyh264
     // decoder, so start every new session from a clean decoder state.
@@ -265,7 +273,7 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
     statusSpr.setTextDatum(TL_DATUM);
     amoled.pushColors(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, (uint16_t *)statusSpr.getPointer());
   } else if (type == WS_EVT_DISCONNECT) {
-    Serial.println("Client disconnected");
+    LOGLN("Client disconnected");
     statusSpr.fillSprite(TFT_BLACK);
     statusSpr.setTextDatum(TC_DATUM);
     statusSpr.setTextColor(TFT_YELLOW, TFT_BLACK);
@@ -279,7 +287,7 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
     }
 
     if (info->len > WS_ASSEMBLY_BUF_SIZE) {
-      Serial.printf("Dropping oversized WS message: %llu bytes\n", (unsigned long long)info->len);
+      LOGF("Dropping oversized WS message: %llu bytes\n", (unsigned long long)info->len);
       return;
     }
     if (info->index == 0) {
@@ -344,25 +352,25 @@ static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
       uint8_t r8 = ((topLeftPixel >> 11) & 0x1F) * 255 / 31;
       uint8_t g8 = ((topLeftPixel >> 5) & 0x3F) * 255 / 63;
       uint8_t b8 = (topLeftPixel & 0x1F) * 255 / 31;
-      Serial.printf("Frame #%lu (%dx%d, %uB): Recv=%lums | Decode=%lums | GetFrame=%lums | Push=%lums | Ack=%lums | Total=%lums | TopLeft=0x%04X (R=%u G=%u B=%u)\n",
-                    (unsigned long)frameCount, width, height, (unsigned)wsAssemblyLen,
-                    (unsigned long)(t0 - frameRecvStartMs),
-                    (unsigned long)(tDecoded - t0),
-                    (unsigned long)(tGotFrame - tDecoded),
-                    (unsigned long)(tPushed - tGotFrame),
-                    (unsigned long)(tAcked - tPushed),
-                    (unsigned long)(tAcked - frameRecvStartMs),
-                    topLeftPixel, r8, g8, b8);
+      LOGF("Frame #%lu (%dx%d, %uB): Recv=%lums | Decode=%lums | GetFrame=%lums | Push=%lums | Ack=%lums | Total=%lums | TopLeft=0x%04X (R=%u G=%u B=%u)\n",
+           (unsigned long)frameCount, width, height, (unsigned)wsAssemblyLen,
+           (unsigned long)(t0 - frameRecvStartMs),
+           (unsigned long)(tDecoded - t0),
+           (unsigned long)(tGotFrame - tDecoded),
+           (unsigned long)(tPushed - tGotFrame),
+           (unsigned long)(tAcked - tPushed),
+           (unsigned long)(tAcked - frameRecvStartMs),
+           topLeftPixel, r8, g8, b8);
     } else {
       // No displayable frame this message (e.g. only SPS/PPS arrived, no
       // slice yet) - still worth logging Recv/Decode/Ack to see where a
       // stuck-looking stream is actually spending its time.
-      Serial.printf("No frame (%uB): Recv=%lums | Decode=%lums | Ack=%lums | Total=%lums\n",
-                    (unsigned)wsAssemblyLen,
-                    (unsigned long)(t0 - frameRecvStartMs),
-                    (unsigned long)(tDecoded - t0),
-                    (unsigned long)(tAcked - tDecoded),
-                    (unsigned long)(tAcked - frameRecvStartMs));
+      LOGF("No frame (%uB): Recv=%lums | Decode=%lums | Ack=%lums | Total=%lums\n",
+           (unsigned)wsAssemblyLen,
+           (unsigned long)(t0 - frameRecvStartMs),
+           (unsigned long)(tDecoded - t0),
+           (unsigned long)(tAcked - tDecoded),
+           (unsigned long)(tAcked - frameRecvStartMs));
     }
   }
 }
@@ -376,7 +384,7 @@ void setup() {
   // src/LilyGo_AMOLED.cpp for why begin() disables SD-card init on the 2.41"
   // T4-S3 specifically (mounting one that isn't there panics on boot).
   if (!amoled.begin()) {
-    Serial.println("Failed to detect the LilyGo AMOLED panel!");
+    LOGLN("Failed to detect the LilyGo AMOLED panel!");
     while (1) delay(1000);
   }
   amoled.setRotation(0);
@@ -387,7 +395,7 @@ void setup() {
 
   decoder = h264_decode_open(DISPLAY_WIDTH, DISPLAY_HEIGHT);
   if (!decoder) {
-    Serial.println("Fatal: failed to open H.264 decoder!");
+    LOGLN("Fatal: failed to open H.264 decoder!");
     statusSpr.fillSprite(TFT_BLACK);
     statusSpr.setTextDatum(MC_DATUM);
     statusSpr.setTextColor(TFT_RED, TFT_BLACK);
@@ -400,7 +408,7 @@ void setup() {
 
   wsAssemblyBuf = (uint8_t *)heap_caps_malloc(WS_ASSEMBLY_BUF_SIZE, MALLOC_CAP_SPIRAM);
   if (!wsAssemblyBuf) {
-    Serial.println("Fatal: failed to allocate WS assembly buffer!");
+    LOGLN("Fatal: failed to allocate WS assembly buffer!");
     statusSpr.fillSprite(TFT_BLACK);
     statusSpr.setTextDatum(MC_DATUM);
     statusSpr.setTextColor(TFT_RED, TFT_BLACK);
