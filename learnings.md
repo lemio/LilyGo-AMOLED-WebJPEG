@@ -85,6 +85,14 @@ references in config files that don't get type-checked against anything.
 
 ## H.264 decode performance
 
+Video comparing H.264 vs webJPEG
+
+
+
+https://github.com/user-attachments/assets/b82c2d7a-fd30-4112-9a69-beb496bad723
+
+
+
 **Resolution dominates, not the decoder.** A YouTube demo of the same chip and decoder
 running much faster turned out to be decoding at 160x128 versus this example's
 600x450 - about 13x fewer pixels, which lines up almost exactly with the measured

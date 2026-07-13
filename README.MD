@@ -15,6 +15,10 @@ no PlatformIO install required just to try it.
 
 ## Which example do I want?
 
+https://github.com/user-attachments/assets/b82c2d7a-fd30-4112-9a69-beb496bad723
+
+Video showing the streaming of a browser showing a [countdown timer](https://m.youtube.com/watch?v=uo9dAIQR3g8) via JPEG frames and H264.
+
 **Start with webH264** unless you have a specific reason not to. H.264 is the more
 modern, more widely understood way to send video over a low-bandwidth link, and it
 measured faster than webJPEG even on this software-only setup (see table below).
