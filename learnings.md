@@ -87,7 +87,11 @@ references in config files that don't get type-checked against anything.
 
 Video comparing H.264 vs webJPEG
 
-https://github.com/user-attachments/assets/2f21e1c2-556a-4e4b-8ada-76936aa6dad3
+
+
+https://github.com/user-attachments/assets/b82c2d7a-fd30-4112-9a69-beb496bad723
+
+
 
 **Resolution dominates, not the decoder.** A YouTube demo of the same chip and decoder
 running much faster turned out to be decoding at 160x128 versus this example's
