@@ -92,6 +92,18 @@ decode time difference. Software H.264 decode cost scales with pixel/macroblock 
 there's no hardware decode block on ESP32-S3 (only ESP32-P4 has one), so at a given
 resolution the decode time is close to fixed regardless of encoder tuning.
 
+Confirmed with real hardware, not just estimation: the T4-S3 (600x450) and a 1.91"
+board (536x240, streaming a mostly-static YouTube animation) measured 215ms and 105ms
+average decode time respectively - a 2.04x difference, against a 2.10x difference in
+pixel count. The two panels' `pushColors()` display-transfer time scaled less cleanly
+(3.19x for 2.10x the pixels), which is more likely differences in the two panels'
+interface overhead (RM690B0 vs RM67162) than anything this app controls. See
+`examples/webH264/README.md`'s "Measured performance" for the full numbers. (Also
+surfaced in passing: `webH264.cpp` explicitly sets `setRotation(0)`, which reported the
+1.91" panel as 536x240 landscape - the opposite orientation from the 240x536 portrait
+listed as its native resolution. `webJPEG` doesn't set rotation, so the two examples
+may report different orientations for the same physical board.)
+
 **Bitrate and keyframes matter too, just less than resolution.** Decode cost also
 scales with how much residual data there is per frame - this example's own per-frame
 timing log showed a 1038-byte frame decode in 188ms versus 280ms for a 6392-byte frame
@@ -115,6 +127,32 @@ decoded top-left pixel's color: it read back as `(16,16,16)` for content that sh
 have been pure black - exactly what you'd get from feeding limited-range `Y=16` through
 a conversion that assumes full range. The fix was a small rescale before the existing
 (already-correct) conversion matrix, not a different matrix.
+
+**webJPEG's cheap decode doesn't mean a faster overall pipeline.** On the same 1.91"
+board, webJPEG measured slower end-to-end than webH264 (~5.4fps vs ~8.2fps) despite JPEG
+decode itself being roughly 65x cheaper than H.264 decode (~1.6ms vs ~105ms) - the
+opposite of what "JPEG decode is cheap" would suggest on its own. The actual bottleneck
+turned out to be how `webJPEG.cpp` pushes pixels to the display: when the incoming
+frame matches the display size exactly, it pushes each decoded 16x16 MCU block to the
+display individually as the JPEG decoder produces it (510 separate `pushColors()` calls
+for a 536x240 frame, ~360us each) rather than assembling a full frame buffer and
+pushing once, which is what webH264 always does. Two lessons here: first, decode time
+alone doesn't tell you the whole story - measure the full pipeline, not just the part
+you assumed was the bottleneck. Second, webJPEG also has no flow control equivalent to
+webH264's ack-based pacing (see above); it just drops fully-received frames it doesn't
+have time to render (measured: ~70% of received frames dropped in the same session),
+wasting browser-side encode and network work for nothing. webH264's ack protocol exists
+specifically to avoid that waste.
+
+There's also a structural reason the gap should widen further in webH264's favor on
+more realistic (non-flat, detailed) content than this repo has been measured against so
+far: webJPEG decodes every frame independently, so a detailed frame costs the same
+whether it's the first frame or the ten-thousandth - nothing carries over between
+frames. H.264 can reference the previous frame, so once a complex scene has been sent
+once (as a keyframe), unchanged regions in subsequent frames decode as cheap "skip"
+macroblocks - cost tracks how much *changed*, not how detailed the picture is. This is
+the same "skip macroblock" mechanism behind the bitrate-tuning findings above, just
+framed as a comparison to webJPEG's lack of any equivalent.
 
 ## General
 

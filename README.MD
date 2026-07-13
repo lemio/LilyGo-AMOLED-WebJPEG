@@ -15,22 +15,51 @@ no PlatformIO install required just to try it.
 
 ## Which example do I want?
 
-| | [webJPEG](examples/webJPEG) | [webH264](examples/webH264) |
-| --- | --- | --- |
-| Codec | MJPEG (one JPEG per frame) | H.264 (WebCodecs `VideoEncoder`) |
-| Boards | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) |
-| Frame rate | Up to ~30fps, tunable | ~3-5fps on T4-S3's 600x450 (decoder-bound); faster on smaller panels |
-| Bandwidth | Higher for the same visual quality | Much lower - H.264 compresses far better |
-| Best for | Most boards, smoothest motion | A sharper image at lower bandwidth, on boards where a slower decoder is fine |
+**Start with webH264** unless you have a specific reason not to. H.264 is the more
+modern, more widely understood way to send video over a low-bandwidth link, and it
+measured faster than webJPEG even on this software-only setup (see table below).
 
-Both share the same streaming page ([stream.html](examples/stream.html)) and the same
-WiFi setup flow. The page auto-detects which example is running on the board you point
-it at.
+|            | [webJPEG](examples/webJPEG)                    | [webH264](examples/webH264)                                                  |
+| ---------- | ---------------------------------------------- | ---------------------------------------------------------------------------- |
+| Codec      | MJPEG (one JPEG per frame)                     | H.264 (WebCodecs `VideoEncoder`)                                             |
+| Boards     | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected) | 1.47" Lite, 1.91", 2.41"/T4-S3 (auto-detected)                               |
+| Frame rate | ~5.4fps measured on 1.91" (536x240)            | ~8.2fps measured on 1.91" (536x240)                                          |
+| Bandwidth  | Higher for the same visual quality             | Much lower - H.264 compresses far better                                     |
+| Best for   | Simplicity - no codec tuning, works everywhere | Lower bandwidth and, on this hardware, a higher frame rate too               |
 
-## Flashing
+Both numbers are real measurements on the same board, not estimates or theoretical
+maximums - see [webJPEG's](examples/webJPEG/README.md#measured-performance) and
+[webH264's](examples/webH264/README.md#measured-performance) READMEs for the full data.
+
+**Why H.264 tends to win here, structurally, not just in this one measurement:**
+webJPEG decodes every frame independently from scratch - a detailed, complex frame
+costs roughly the same to decode whether it's frame 1 or frame 10,000, and nothing
+carries over between frames. H.264 can reference the previous frame: once a complex
+scene has been sent once (as a keyframe), unchanged regions in every frame after that
+decode as cheap "skip" macroblocks - the cost tracks how much actually *changed*, not
+how detailed the picture is. For a highly detailed but mostly-static picture, webJPEG
+pays full decode cost on every single frame; H.264 pays it once. This is on top of
+H.264's usual bandwidth advantage, and it's why the gap should widen further in
+webH264's favor for realistic, detailed content, not just the flatter UI/screen
+content this repo has been measured against so far. See webH264's README for the
+bitrate/keyframe tuning that makes the most of this.
+
+webJPEG is still the simpler, more predictable choice if you'd rather every frame cost
+the same regardless of content and don't want to think about codec tuning.
+
+**On chips with hardware H.264 decode (e.g. ESP32-P4):** this tradeoff would tilt even
+further toward webH264, since the software-decode cost this repo's numbers are all
+bound by wouldn't apply. This repo doesn't support P4 yet - both examples target
+ESP32-S3 boards, which have no hardware H.264 decode block.
+
+Both examples share the same streaming page ([stream.html](examples/stream.html)) and
+the same WiFi setup flow. The page auto-detects which example is running on the board
+you point it at.
+
+## Flashing through your browser
 
 No PlatformIO install needed. Every push to `main` builds and publishes ready-to-flash
-firmware at **[lemio.github.io/LilyGo-AMOLED-WebJPEG](https://lemio.github.io/LilyGo-AMOLED-WebJPEG/)**:
+firmware at the [browser flasher](https://lemio.github.io/LilyGo-AMOLED-WebJPEG/wizard.html):
 
 1. Open that link in Chrome or Edge (Web Serial support is required).
 2. Pick WebJPEG or WebH264 (see the comparison table above).
@@ -92,15 +121,11 @@ Pages fixes that, with two consequences:
 
 ## Supported boards
 
-| Product | SOC | Flash | PSRAM | Resolution | Size |
-| ------- | --- | ----- | ----- | ---------- | ---- |
-| [T-Display-AMOLED-Lite][1] | ESP32-S3R8 | 16MB | 8MB (OPI) | 194x368 | 1.47" |
-| [T-Display-S3 AMOLED][2] | ESP32-S3R8 | 16MB | 8MB (OPI) | 240x536 | 1.91" |
-| [T4-S3][3] | ESP32-S3R8 | 16MB | 8MB (OPI) | 450x600 | 2.41" |
-
-[1]: https://www.lilygo.cc/products/t-display-amoled-lite
-[2]: https://www.lilygo.cc/products/t-display-s3-amoled
-[3]: https://www.lilygo.cc/products/t4-s3
+| Product                    | SOC        | Flash | PSRAM     | Resolution | Size  |
+| -------------------------- | ---------- | ----- | --------- | ---------- | ----- |
+| [T-Display-AMOLED-Lite][1] | ESP32-S3R8 | 16MB  | 8MB (OPI) | 194x368    | 1.47" |
+| [T-Display-S3 AMOLED][2]   | ESP32-S3R8 | 16MB  | 8MB (OPI) | 240x536    | 1.91" |
+| [T4-S3][3]                 | ESP32-S3R8 | 16MB  | 8MB (OPI) | 450x600    | 2.41" |
 
 ## Examples
 
@@ -153,11 +178,11 @@ This also turns off Serial output over USB-C; output moves to GPIO43/GPIO44 inst
 
 ## Resources
 
-| Product | Schematic | Dimensions | PCB 3D | Shell |
-| ------- | --------- | ---------- | ------ | ----- |
-| [T-Display-AMOLED-Lite][1] | [PDF](./schematic/T-Display_AMOLED-Lite.pdf) | [DWG](./dimensions/T-Display-AMOLED-Lite.DWG) | [STP](./dimensions/T-Display-AMOLED-Lite-PCB-3D.7z) | - |
-| [T-Display-S3 AMOLED][2] | [PDF](./schematic/T-Display-S3-AMOLED-Touch.pdf) | [DWG](./dimensions/T-Display-S3-AMOLED-Touch.DWG) | [STP](./dimensions/T-Display-S3-AMOLED-Touch-PCB-3D.7z) | [ZIP](./shell/T-Display-S3-AMOLED.zip) |
-| [T4-S3][3] | [PDF](./schematic/T4-S3-240719.pdf) | [DWG](./dimensions/T4-S3-AMOLED.DWG) | [STP](./dimensions/T4-S3-AMOLED-PCB-3D.7z) | [ZIP](./shell/T4-S3-AMOLED.zip) |
+| Product                    | Schematic                                        | Dimensions                                        | PCB 3D                                                  | Shell                                  |
+| -------------------------- | ------------------------------------------------ | ------------------------------------------------- | ------------------------------------------------------- | -------------------------------------- |
+| [T-Display-AMOLED-Lite][1] | [PDF](./schematic/T-Display_AMOLED-Lite.pdf)     | [DWG](./dimensions/T-Display-AMOLED-Lite.DWG)     | [STP](./dimensions/T-Display-AMOLED-Lite-PCB-3D.7z)     | -                                      |
+| [T-Display-S3 AMOLED][2]   | [PDF](./schematic/T-Display-S3-AMOLED-Touch.pdf) | [DWG](./dimensions/T-Display-S3-AMOLED-Touch.DWG) | [STP](./dimensions/T-Display-S3-AMOLED-Touch-PCB-3D.7z) | [ZIP](./shell/T-Display-S3-AMOLED.zip) |
+| [T4-S3][3]                 | [PDF](./schematic/T4-S3-240719.pdf)              | [DWG](./dimensions/T4-S3-AMOLED.DWG)              | [STP](./dimensions/T4-S3-AMOLED-PCB-3D.7z)              | [ZIP](./shell/T4-S3-AMOLED.zip)        |
 
 Datasheets: [ESP32S3-R8](https://www.espressif.com.cn/en/support/documents/technical-documents?keys=&field_type_tid%5B%5D=842),
 [SH8501B0 (1.47" driver)](./datasheet/SH8501B0%20DataSheet.pdf),
@@ -177,3 +202,7 @@ building this repo - useful if you're extending it or hit something similar.
 MIT - see [LICENSE](./LICENSE). Built on
 [LilyGo-AMOLED-Series](https://github.com/Xinyuan-LilyGO/LilyGo-AMOLED-Series) by
 LilyGO/Xinyuan-LilyGO.
+
+[1]: https://www.lilygo.cc/products/t-display-amoled-lite
+[2]: https://www.lilygo.cc/products/t-display-s3-amoled
+[3]: https://www.lilygo.cc/products/t4-s3
