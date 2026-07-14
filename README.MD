@@ -65,6 +65,10 @@ you point it at.
 
 ## Flashing through your browser
 
+
+https://github.com/user-attachments/assets/d4254f9d-f0c3-4d79-989b-088d2321c415
+
+
 No PlatformIO install needed. Every push to `main` builds and publishes ready-to-flash
 firmware at the [browser flasher](https://lemio.github.io/LilyGo-AMOLED-WebJPEG/wizard.html):
 
