@@ -72,6 +72,23 @@ spinner/QR-code-on-failure flow onto `webH264` meant both examples now behave
 identically up to the point where streaming starts - one thing to get right instead of
 two, and one thing to test.
 
+**Rotation for sideways-mounted displays happens entirely in the browser, never on the
+device.** Both firmwares only ever receive and render a plain landscape image - a
+sideways physical mount is handled by rotating the captured content in
+`stream.html` before it's sent, via the standard canvas
+`translate`+`rotate`+`drawImage` trick (draw into a virtual swapped-dimension area,
+then rotate that into the real landscape output size). This keeps both device-side
+render paths exactly as they were - no new firmware code, no new wire format, nothing
+to break the render-timing work above. The one place this wasn't free: webH264 normally
+hands a captured `VideoFrame` straight from `MediaStreamTrackProcessor` to
+`VideoEncoder.encode()` with no canvas step at all, specifically because that path's
+throughput is already tight (see the whole "H.264 decode performance" section above).
+Rotation needs pixels to go through a canvas, and `VideoEncoder.encode()` only accepts
+a `VideoFrame`, so a non-zero rotation reconstructs one from the rotated canvas
+(`new VideoFrame(canvas, { timestamp: original.timestamp })`) before encoding - real
+extra cost, but only paid when rotation is actually in use; the default (0°) path is
+untouched.
+
 ## Debugging the flasher
 
 The browser flasher stopped letting users set SSID/password after `webH264` was added.

@@ -109,6 +109,10 @@ please open an issue with a serial log from just before it happens.
 Once [stream.html](../stream.html) detects a webJPEG board (or you force "Mode: Force
 WebJPEG"), it shows:
 
+- **Rotation** (shared with webH264) - 0/90/180/270deg. Rotates the captured content in
+  the browser before sending; the board always receives a plain landscape image
+  regardless of this setting, so this is how to drive a physically sideways-mounted
+  display. See the root README for how it works.
 - **Display Size** - auto-filled from `/boardinfo`; override manually if it's wrong or
   the board is unreachable at page load.
 - **Source** - webcam or screen share.
@@ -119,9 +123,9 @@ WebJPEG"), it shows:
   endpoint from colour mode's `/ws`.
 
 `stream.html` also accepts URL query parameters for bookmarking a specific setup:
-`espAddress`, `displaySize` (`WxH` or a predefined size), `customWidth`/`customHeight`
-(when `displaySize=custom`), `sourceType` (`camera`/`screen`), `frameRate` (1-30),
-`quality` (0.1-1.0), `monoMode` (`true`/`false`).
+`espAddress`, `rotation` (`0`/`90`/`180`/`270`), `displaySize` (`WxH` or a predefined
+size), `customWidth`/`customHeight` (when `displaySize=custom`), `sourceType`
+(`camera`/`screen`), `frameRate` (1-30), `quality` (0.1-1.0), `monoMode` (`true`/`false`).
 
 ## Troubleshooting
 

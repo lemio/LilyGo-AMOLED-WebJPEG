@@ -110,6 +110,13 @@ environment name is `webH264`.
 Once [stream.html](../stream.html) detects a webH264 board (or you force "Mode: Force
 WebH264"), it shows (all adjustable live, mid-stream, except Resolution):
 
+- **Rotation** (shared with webJPEG) - 0/90/180/270deg, changeable live. Rotates the
+  captured content in the browser before sending; the board always receives a plain
+  landscape image regardless of this setting, so this is how to drive a physically
+  sideways-mounted display. Takes an extra canvas round-trip per frame when non-zero
+  (routes the captured `VideoFrame` through a rotated canvas and back into a new
+  `VideoFrame` before encoding) - left off the direct capture-to-encoder path when set
+  to 0, since that path's throughput is already tight (see `learnings.md`).
 - **Resolution** - auto-filled from `/boardinfo` once the board is detected, not
   user-editable (see "Board support" above).
 - **Capture FPS** - how fast the browser asks the OS to capture frames. Changing this
@@ -125,9 +132,9 @@ WebH264"), it shows (all adjustable live, mid-stream, except Resolution):
 - **Ignore device acks** - disables flow control entirely.
 
 `stream.html` also accepts URL query parameters for bookmarking a specific setup:
-`espAddress`, `mode=h264`, `h264Fps` (1-60), `h264Bitrate` (kbps, 50-5000),
-`h264BitrateMode` (`constant`/`variable`), `maxInFlight` (`1`/`2`), `ignoreAcks`
-(`true`/`false`).
+`espAddress`, `mode=h264`, `rotation` (`0`/`90`/`180`/`270`), `h264Fps` (1-60),
+`h264Bitrate` (kbps, 50-5000), `h264BitrateMode` (`constant`/`variable`), `maxInFlight`
+(`1`/`2`), `ignoreAcks` (`true`/`false`).
 
 ## Why this needs its own env
 

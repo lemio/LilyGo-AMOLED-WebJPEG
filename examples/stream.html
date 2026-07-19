@@ -150,6 +150,17 @@
             </div>
             <div class="hint" id="modeHint">Enter the address above - the page will detect which firmware is running and show the matching options below.</div>
 
+            <div>
+                <label>Rotation:</label>
+                <select id="rotation">
+                    <option value="0" selected>0&deg; (landscape)</option>
+                    <option value="90">90&deg;</option>
+                    <option value="180">180&deg;</option>
+                    <option value="270">270&deg;</option>
+                </select>
+            </div>
+            <div class="hint">Rotates the captured content before sending - the device always receives a plain landscape image, so this is how to use it mounted sideways or upside down. Try 90 and 270 if unsure which one matches your physical mount.</div>
+
             <div class="mode-jpeg-only">
                 <div>
                     <label>Display Size:</label>
@@ -276,6 +287,7 @@
         const modeOverrideSelect = document.getElementById('modeOverride');
         const variantBadge = document.getElementById('variantBadge');
         const modeHint = document.getElementById('modeHint');
+        const rotationSelect = document.getElementById('rotation');
 
         // ---- JPEG-mode DOM refs ----
         const frameRateInput = document.getElementById('frameRate');
@@ -394,6 +406,45 @@
         displaySizeSelect.addEventListener('change', (e) => {
             customSizeDiv.style.display = (e.target.value === 'custom') ? 'block' : 'none';
         });
+
+        // ============================================================
+        // Shared rotation helper (both pipelines draw through this)
+        // ============================================================
+
+        function getRotation() {
+            return parseInt(rotationSelect.value, 10) || 0;
+        }
+
+        // Draws `source` (a <video> element or a captured VideoFrame - both are valid
+        // CanvasImageSource) into ctx, rotated by rotationDeg, filling an
+        // outW x outH canvas exactly. The device always receives a plain outW x outH
+        // (landscape) image no matter the rotation - for 90/270 that means the source
+        // fills a virtual outH x outW (swapped) area first, which this rotation then
+        // maps onto the landscape canvas, so a physically sideways-mounted display can
+        // still be addressed as landscape on the wire.
+        function drawRotatedFrame(ctx, source, outW, outH, rotationDeg) {
+            ctx.save();
+            switch (rotationDeg) {
+                case 90:
+                    ctx.translate(outW, 0);
+                    ctx.rotate(Math.PI / 2);
+                    ctx.drawImage(source, 0, 0, outH, outW);
+                    break;
+                case 180:
+                    ctx.translate(outW, outH);
+                    ctx.rotate(Math.PI);
+                    ctx.drawImage(source, 0, 0, outW, outH);
+                    break;
+                case 270:
+                    ctx.translate(0, outH);
+                    ctx.rotate(-Math.PI / 2);
+                    ctx.drawImage(source, 0, 0, outH, outW);
+                    break;
+                default:
+                    ctx.drawImage(source, 0, 0, outW, outH);
+            }
+            ctx.restore();
+        }
 
         function updateStatus(message, type) {
             statusDiv.textContent = message;
@@ -661,7 +712,7 @@
                 canvas.width = displayDims.width;
                 canvas.height = displayDims.height;
 
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                drawRotatedFrame(ctx, video, canvas.width, canvas.height, getRotation());
 
                 if (isMono) {
                     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -920,6 +971,14 @@
         }
 
         async function readH264Frames(reader) {
+            // Only used when rotation != 0 - captured frames otherwise go straight from
+            // reader to encoder with no canvas step at all, since that's real per-frame
+            // cost this pipeline can't spare (see learnings.md's throughput findings).
+            const rotationCanvas = document.createElement('canvas');
+            rotationCanvas.width = h264DetectedWidth;
+            rotationCanvas.height = h264DetectedHeight;
+            const rotationCtx = rotationCanvas.getContext('2d');
+
             while (streaming && video.srcObject && video.srcObject.active && h264Encoder && h264Encoder.state === 'configured') {
                 const { done, value } = await reader.read();
                 if (done) {
@@ -954,9 +1013,21 @@
                 if (!h264IgnoreAcks) {
                     h264InFlight.push({ sentAt: now });
                 }
+
+                // Rotation needs a real VideoFrame to encode, not just a canvas - the
+                // rotated pixels have to go back through the VideoFrame constructor,
+                // reusing the original frame's timestamp so encoder pacing is unaffected.
+                let frameToEncode = value;
+                const rotationDeg = getRotation();
+                if (rotationDeg !== 0) {
+                    drawRotatedFrame(rotationCtx, value, h264DetectedWidth, h264DetectedHeight, rotationDeg);
+                    frameToEncode = new VideoFrame(rotationCanvas, { timestamp: value.timestamp });
+                    value.close();
+                }
+
                 h264LastEncodeStart = now;
-                h264Encoder.encode(value, { keyFrame: isKeyFrame });
-                value.close();
+                h264Encoder.encode(frameToEncode, { keyFrame: isKeyFrame });
+                frameToEncode.close();
                 h264SentCount++;
             }
             h264Log('readH264Frames loop exited');
@@ -1005,6 +1076,13 @@
                 const mode = urlParams.get('mode');
                 if (['auto', 'jpeg', 'h264'].includes(mode)) {
                     modeOverrideSelect.value = mode;
+                }
+            }
+
+            if (urlParams.has('rotation')) {
+                const rotation = urlParams.get('rotation');
+                if (['0', '90', '180', '270'].includes(rotation)) {
+                    rotationSelect.value = rotation;
                 }
             }
 
@@ -1097,8 +1175,82 @@
             }
         }
 
+        // ============================================================
+        // Settings persistence (localStorage) - so the form doesn't reset to
+        // defaults on every visit. Query parameters (above) still take priority
+        // when present, so a bookmarked/shared link keeps overriding whatever was
+        // last saved locally.
+        // ============================================================
+
+        const SETTINGS_STORAGE_KEY = 'stream-settings';
+
+        // { elementId, 'value' | 'checked' } for every control worth remembering
+        // between visits. Deliberately excludes nothing sensitive - espAddress is a
+        // LAN address, not a credential.
+        const PERSISTED_FIELDS = [
+            ['espAddress', 'value'],
+            ['modeOverride', 'value'],
+            ['rotation', 'value'],
+            ['displaySize', 'value'],
+            ['customWidth', 'value'],
+            ['customHeight', 'value'],
+            ['frameRate', 'value'],
+            ['quality', 'value'],
+            ['monoMode', 'checked'],
+            ['sourceType', 'value'],
+            ['h264FpsInput', 'value'],
+            ['h264BitrateInput', 'value'],
+            ['h264BitrateModeSelect', 'value'],
+            ['maxInFlightSelect', 'value'],
+            ['ignoreAcksCheckbox', 'checked'],
+        ];
+
+        function saveSettings() {
+            const settings = {};
+            for (const [id, prop] of PERSISTED_FIELDS) {
+                const el = document.getElementById(id);
+                if (el) settings[id] = el[prop];
+            }
+            try {
+                localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+            } catch (err) {
+                console.warn('Could not save settings to localStorage:', err);
+            }
+        }
+
+        // Restores saved values directly onto the elements - doesn't fire 'change'/
+        // 'input' events, so anything that depends on one of these values also needs
+        // to be synced manually here (quality's label, custom-size-div's visibility).
+        function loadSettings() {
+            let settings;
+            try {
+                const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+                if (!raw) return;
+                settings = JSON.parse(raw);
+            } catch (err) {
+                console.warn('Could not load settings from localStorage:', err);
+                return;
+            }
+            for (const [id, prop] of PERSISTED_FIELDS) {
+                if (!(id in settings)) continue;
+                const el = document.getElementById(id);
+                if (el) el[prop] = settings[id];
+            }
+            qualityValue.textContent = qualitySlider.value;
+            customSizeDiv.style.display = (displaySizeSelect.value === 'custom') ? 'block' : 'none';
+        }
+
+        function attachPersistenceListeners() {
+            for (const [id] of PERSISTED_FIELDS) {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', saveSettings);
+            }
+        }
+
         window.addEventListener('load', async () => {
+            loadSettings();
             loadQueryParameters();
+            attachPersistenceListeners();
             applyModeUI();
             await detectBoardConfig();
             console.log('Ready to stream to ESP32');
